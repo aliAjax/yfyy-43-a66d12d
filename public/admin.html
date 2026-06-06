@@ -184,7 +184,10 @@
                 <div class="tab-content" id="tab-holidays">
                     <div class="page-header">
                         <h3>节假日设置</h3>
-                        <button class="btn btn-primary" id="btnAddHoliday">+ 新增节假日</button>
+                        <div>
+                            <button class="btn btn-secondary" id="btnBatchImportHoliday">批量导入</button>
+                            <button class="btn btn-primary" id="btnAddHoliday">+ 新增节假日</button>
+                        </div>
                     </div>
 
                     <div class="holiday-tips">
@@ -322,6 +325,40 @@
             <div class="modal-actions">
                 <button class="btn btn-secondary" id="btnCancelHoliday">取消</button>
                 <button class="btn btn-primary" id="btnSaveHoliday">保存</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal" id="batchImportHolidayModal">
+        <div class="modal-content modal-large">
+            <h3>节假日批量导入</h3>
+            <div class="form-group">
+                <label>粘贴节假日数据 <span class="required">*</span></label>
+                <textarea id="batchHolidayInput" rows="8" placeholder="每行一条，格式：日期,名称&#10;例如：&#10;2025-01-01,元旦&#10;2025-01-28,春节&#10;2025-04-04,清明节"></textarea>
+                <div class="form-tip">支持格式：日期 + 英文逗号 + 名称，每行一条。日期格式为 YYYY-MM-DD。</div>
+            </div>
+            <div class="batch-actions">
+                <button class="btn btn-primary" id="btnPreviewBatchHoliday">预览校验结果</button>
+            </div>
+            <div id="batchHolidayPreview" class="batch-preview" style="display: none;">
+                <div class="preview-summary" id="batchHolidaySummary"></div>
+                <div class="preview-table-container">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>序号</th>
+                                <th>日期</th>
+                                <th>节假日名称</th>
+                                <th>状态</th>
+                            </tr>
+                        </thead>
+                        <tbody id="batchHolidayPreviewList"></tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" id="btnCancelBatchHoliday">取消</button>
+                <button class="btn btn-primary" id="btnConfirmBatchHoliday" disabled>确认导入</button>
             </div>
         </div>
     </div>

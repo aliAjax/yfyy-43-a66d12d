@@ -344,6 +344,32 @@ app.delete('/api/holidays/:id', (req, res) => {
   res.json({ success: true });
 });
 
+app.post('/api/holidays/batch', (req, res) => {
+  const { holidays } = req.body;
+  if (!Array.isArray(holidays) || holidays.length === 0) {
+    return res.status(400).json({ error: '节假日数据不能为空' });
+  }
+
+  try {
+    const insertStmt = db.prepare('INSERT OR REPLACE INTO holidays (date, name) VALUES (?, ?)');
+    const insertMany = db.transaction((holidayList) => {
+      let count = 0;
+      for (const h of holidayList) {
+        if (h.date && /^\d{4}-\d{2}-\d{2}$/.test(h.date)) {
+          insertStmt.run(h.date, h.name || '');
+          count++;
+        }
+      }
+      return count;
+    });
+
+    const imported = insertMany(holidays);
+    res.json({ success: true, imported });
+  } catch (e) {
+    res.status(500).json({ error: '批量导入失败' });
+  }
+});
+
 app.get('/api/slots/:itemId/:date', (req, res) => {
   const { itemId, date } = req.params;
   const dateObj = new Date(date);

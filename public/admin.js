@@ -644,6 +644,146 @@ function deleteHoliday(id) {
     });
 }
 
+let batchHolidayData = [];
+
+function openBatchImportHolidayModal() {
+    document.getElementById('batchHolidayInput').value = '';
+    document.getElementById('batchHolidayPreview').style.display = 'none';
+    document.getElementById('btnConfirmBatchHoliday').disabled = true;
+    batchHolidayData = [];
+    document.getElementById('batchImportHolidayModal').classList.add('show');
+}
+
+function isValidDate(dateStr) {
+    const regex = /^\d{4}-\d{2}-\d{2}$/;
+    if (!regex.test(dateStr)) return false;
+    const date = new Date(dateStr);
+    return date instanceof Date && !isNaN(date) && dateStr === formatDate(date);
+}
+
+function parseBatchHolidayInput() {
+    const text = document.getElementById('batchHolidayInput').value.trim();
+    if (!text) {
+        showToast('请输入节假日数据', 'error');
+        return [];
+    }
+
+    const lines = text.split('\n').filter(line => line.trim());
+    const results = [];
+    const seenDates = new Set();
+    const existingDates = new Set(state.holidays.map(h => h.date));
+
+    lines.forEach((line, index) => {
+        const trimmedLine = line.trim();
+        const parts = trimmedLine.split(',');
+        const date = parts[0]?.trim();
+        const name = parts.slice(1).join(',').trim();
+
+        const item = {
+            line: index + 1,
+            date: date || '',
+            name: name || '',
+            status: 'ok',
+            message: ''
+        };
+
+        if (!date) {
+            item.status = 'error';
+            item.message = '日期不能为空';
+        } else if (!isValidDate(date)) {
+            item.status = 'error';
+            item.message = '日期格式不正确，应为 YYYY-MM-DD';
+        } else if (seenDates.has(date)) {
+            item.status = 'warn';
+            item.message = '输入内容中存在重复日期';
+        } else if (existingDates.has(date)) {
+            item.status = 'warn';
+            item.message = '该日期已存在于节假日列表中';
+        }
+
+        if (item.status === 'ok') {
+            seenDates.add(date);
+        }
+
+        results.push(item);
+    });
+
+    return results;
+}
+
+function previewBatchHoliday() {
+    batchHolidayData = parseBatchHolidayInput();
+    if (batchHolidayData.length === 0) return;
+
+    const successCount = batchHolidayData.filter(i => i.status === 'ok').length;
+    const errorCount = batchHolidayData.filter(i => i.status === 'error').length;
+    const warnCount = batchHolidayData.filter(i => i.status === 'warn').length;
+
+    const summaryEl = document.getElementById('batchHolidaySummary');
+    summaryEl.innerHTML = `
+        共 ${batchHolidayData.length} 条记录，
+        <span class="success-count">正常 ${successCount} 条</span>，
+        <span class="warn-count">警告 ${warnCount} 条</span>，
+        <span class="error-count">错误 ${errorCount} 条</span>
+    `;
+
+    const tbody = document.getElementById('batchHolidayPreviewList');
+    tbody.innerHTML = batchHolidayData.map(item => {
+        let statusClass = '';
+        let statusText = '';
+        if (item.status === 'ok') {
+            statusClass = 'status-ok';
+            statusText = '✓ 可导入';
+        } else if (item.status === 'warn') {
+            statusClass = 'status-warn';
+            statusText = `⚠ ${item.message}`;
+        } else {
+            statusClass = 'status-error';
+            statusText = `✗ ${item.message}`;
+        }
+        return `
+            <tr>
+                <td>${item.line}</td>
+                <td>${escapeHtml(item.date)}</td>
+                <td>${escapeHtml(item.name) || '-'}</td>
+                <td class="${statusClass}">${statusText}</td>
+            </tr>
+        `;
+    }).join('');
+
+    document.getElementById('batchHolidayPreview').style.display = 'block';
+    document.getElementById('btnConfirmBatchHoliday').disabled = errorCount > 0;
+}
+
+async function confirmBatchHoliday() {
+    const validItems = batchHolidayData.filter(i => i.status === 'ok' || i.status === 'warn');
+    if (validItems.length === 0) {
+        showToast('没有可导入的记录', 'error');
+        return;
+    }
+
+    const importData = validItems.map(i => ({ date: i.date, name: i.name }));
+
+    try {
+        const res = await fetch(`${API_BASE}/holidays/batch`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ holidays: importData })
+        });
+
+        const data = await res.json();
+        if (!res.ok) {
+            throw new Error(data.error || '批量导入失败');
+        }
+
+        showToast(`成功导入 ${data.imported} 条节假日`, 'success');
+        document.getElementById('batchImportHolidayModal').classList.remove('show');
+        loadHolidays();
+    } catch (e) {
+        showToast(e.message, 'error');
+    }
+}
+
 async function loadReminders() {
     await searchReminders();
 }
@@ -831,6 +971,13 @@ function initModals() {
         document.getElementById('holidayModal').classList.remove('show');
     });
     document.getElementById('btnSaveHoliday').addEventListener('click', saveHoliday);
+
+    document.getElementById('btnBatchImportHoliday').addEventListener('click', openBatchImportHolidayModal);
+    document.getElementById('btnCancelBatchHoliday').addEventListener('click', () => {
+        document.getElementById('batchImportHolidayModal').classList.remove('show');
+    });
+    document.getElementById('btnPreviewBatchHoliday').addEventListener('click', previewBatchHoliday);
+    document.getElementById('btnConfirmBatchHoliday').addEventListener('click', confirmBatchHoliday);
 
     document.getElementById('btnCancelSlot').addEventListener('click', () => {
         document.getElementById('slotModal').classList.remove('show');

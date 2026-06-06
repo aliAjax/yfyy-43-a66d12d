@@ -447,6 +447,76 @@ body {
     overflow-y: auto;
 }
 
+.modal-content.modal-large {
+    max-width: 680px;
+}
+
+.batch-actions {
+    margin-bottom: 16px;
+}
+
+.batch-preview {
+    background: #fafafa;
+    border-radius: 8px;
+    padding: 16px;
+    margin-bottom: 8px;
+}
+
+.preview-summary {
+    margin-bottom: 12px;
+    font-size: 14px;
+    color: #555;
+}
+
+.preview-summary .success-count {
+    color: #52c41a;
+    font-weight: 600;
+}
+
+.preview-summary .error-count {
+    color: #ff4d4f;
+    font-weight: 600;
+}
+
+.preview-summary .warn-count {
+    color: #fa8c16;
+    font-weight: 600;
+}
+
+.preview-table-container {
+    max-height: 240px;
+    overflow-y: auto;
+    border: 1px solid #e8e8e8;
+    border-radius: 6px;
+    background: white;
+}
+
+.preview-table-container .data-table th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+}
+
+.status-ok {
+    color: #52c41a;
+    font-size: 13px;
+}
+
+.status-error {
+    color: #ff4d4f;
+    font-size: 13px;
+}
+
+.status-warn {
+    color: #fa8c16;
+    font-size: 13px;
+}
+
+.btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
 .modal-content h3 {
     margin-bottom: 20px;
     color: #333;
