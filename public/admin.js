@@ -34,6 +34,15 @@ function formatDate(date) {
     return `${year}-${month}-${day}`;
 }
 
+function escapeHtml(value) {
+    return String(value || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
 function getStatusText(status) {
     const map = {
         pending: '待办理',
@@ -308,13 +317,23 @@ function renderItems() {
             <td>${item.created_at ? item.created_at.substring(0, 10) : '-'}</td>
             <td>
                 <div class="action-buttons">
-                    <button class="btn btn-link" onclick="openSlotModal(${item.id}, '${item.name}')">号源设置</button>
+                    <button class="btn btn-link btn-slot-setting" data-item-id="${item.id}">号源设置</button>
                     <button class="btn btn-link" onclick="editItem(${item.id})">编辑</button>
                     <button class="btn btn-link danger" onclick="deleteItem(${item.id})">删除</button>
                 </div>
             </td>
         </tr>
     `).join('');
+
+    tbody.querySelectorAll('.btn-slot-setting').forEach(button => {
+        button.addEventListener('click', () => {
+            const itemId = parseInt(button.dataset.itemId, 10);
+            const item = state.items.find(i => i.id === itemId);
+            if (item) {
+                openSlotModal(item.id, item.name);
+            }
+        });
+    });
 }
 
 function openAddItemModal() {
@@ -493,7 +512,7 @@ function openSlotModal(itemId, itemName) {
     state.slotModalData = { itemId, itemName, date: today };
 
     document.getElementById('slotInfo').innerHTML = `
-        <p><strong>事项：</strong>${itemName}</p>
+        <p><strong>事项：</strong>${escapeHtml(itemName)}</p>
         <p><strong>日期：</strong><input type="date" id="slotDate" value="${today}" style="width:auto;padding:4px 8px;border:1px solid #d9d9d9;border-radius:4px;font-size:13px;"></p>
         <p><strong>当前号源：</strong><span id="slotCurrentCount">-</span> / <span id="slotCurrentMax">-</span></p>
     `;
