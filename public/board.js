@@ -201,6 +201,7 @@ function renderTimeSlotCard(slot) {
                                     <div class="slot-calling-info">
                                         <div class="slot-calling-name">${escapeHtml(apt.user_name)}</div>
                                         <div class="slot-calling-item-name">${escapeHtml(apt.item_name)}</div>
+                                        <div class="slot-calling-window">${escapeHtml(apt.window_name || '系统分配')}</div>
                                     </div>
                                 </div>
                             `).join('')}
@@ -297,6 +298,7 @@ function renderItemCard(item) {
                                     <div class="calling-info">
                                         <div class="calling-name">${escapeHtml(apt.user_name)}</div>
                                         <div class="calling-time">${apt.time_slot} 时段</div>
+                                        <div class="calling-window">${escapeHtml(apt.window_name || '系统分配')}</div>
                                     </div>
                                 </div>
                             `).join('')}
@@ -337,11 +339,15 @@ function showCallingOverlay(apt) {
     const overlay = document.getElementById('callingOverlay');
     const numberEl = document.getElementById('overlayNumber');
     const itemEl = document.getElementById('overlayItem');
+    const windowEl = document.getElementById('overlayWindow');
     const nameEl = document.getElementById('overlayName');
 
     numberEl.textContent = padNumber(apt.queue_number);
     itemEl.textContent = apt.item_name;
-    nameEl.textContent = `请 ${apt.user_name} 前往窗口办理`;
+    if (windowEl) {
+        windowEl.textContent = apt.window_name || '系统分配';
+    }
+    nameEl.textContent = `请 ${apt.user_name} 前往${apt.window_name || '窗口'}办理`;
 
     overlay.classList.remove('hidden');
 

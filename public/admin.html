@@ -30,6 +30,10 @@
                     <span class="nav-icon">🎉</span>
                     <span>节假日管理</span>
                 </div>
+                <div class="nav-item" data-tab="windows">
+                    <span class="nav-icon">🪟</span>
+                    <span>窗口管理</span>
+                </div>
                 <div class="nav-item" data-tab="reminders">
                     <span class="nav-icon">📱</span>
                     <span>提醒记录</span>
@@ -172,6 +176,7 @@
                                     <th>预约日期</th>
                                     <th>时段</th>
                                     <th>事项</th>
+                                    <th>窗口</th>
                                     <th>姓名</th>
                                     <th>手机号</th>
                                     <th>状态</th>
@@ -180,7 +185,7 @@
                                 </tr>
                             </thead>
                             <tbody id="appointmentList">
-                                <tr><td colspan="9" class="loading">加载中...</td></tr>
+                                <tr><td colspan="10" class="loading">加载中...</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -236,6 +241,32 @@
                             </thead>
                             <tbody id="holidayList">
                                 <tr><td colspan="4" class="loading">加载中...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="tab-content" id="tab-windows">
+                    <div class="page-header">
+                        <h3>办理窗口管理</h3>
+                        <button class="btn btn-primary" id="btnAddWindow">+ 新增窗口</button>
+                    </div>
+
+                    <div class="table-container">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>序号</th>
+                                    <th>窗口名称</th>
+                                    <th>窗口描述</th>
+                                    <th>状态</th>
+                                    <th>排序</th>
+                                    <th>创建时间</th>
+                                    <th>操作</th>
+                                </tr>
+                            </thead>
+                            <tbody id="windowList">
+                                <tr><td colspan="7" class="loading">加载中...</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -433,6 +464,17 @@
             </div>
             <div class="form-group">
                 <div class="materials-header">
+                    <label>办理窗口配置</label>
+                </div>
+                <div id="windowConfigList" class="window-config-list">
+                    <div class="empty-state-sm">
+                        <span>加载中...</span>
+                    </div>
+                </div>
+                <small class="form-tip">设置该事项可由哪些窗口办理，以及每个窗口的默认号源容量</small>
+            </div>
+            <div class="form-group">
+                <div class="materials-header">
                     <label>所需材料清单</label>
                     <button type="button" class="btn btn-sm btn-primary" id="btnAddMaterial">+ 添加材料</button>
                 </div>
@@ -445,6 +487,29 @@
             <div class="modal-actions">
                 <button class="btn btn-secondary" id="btnCancelItem">取消</button>
                 <button class="btn btn-primary" id="btnSaveItem">保存</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal" id="windowModal">
+        <div class="modal-content">
+            <h3 id="windowModalTitle">新增窗口</h3>
+            <div class="form-group">
+                <label>窗口名称 <span class="required">*</span></label>
+                <input type="text" id="windowName" placeholder="如：1号窗口、综合窗口等" maxlength="50">
+            </div>
+            <div class="form-group">
+                <label>窗口描述</label>
+                <textarea id="windowDesc" placeholder="请输入窗口描述（选填）" rows="3" maxlength="200"></textarea>
+            </div>
+            <div class="form-group">
+                <label>排序</label>
+                <input type="number" id="windowSortOrder" value="0" min="0" max="100">
+                <small class="form-tip">数字越小排序越靠前</small>
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" id="btnCancelWindow">取消</button>
+                <button class="btn btn-primary" id="btnSaveWindow">保存</button>
             </div>
         </div>
     </div>

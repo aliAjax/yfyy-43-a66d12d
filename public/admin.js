@@ -18,6 +18,9 @@ const state = {
     editingRestrictionId: null,
     editingItemId: null,
     editingMaterials: [],
+    windows: [],
+    editingWindowId: null,
+    editingItemWindows: [],
     slotModalData: null,
     confirmCallback: null
 };
@@ -140,7 +143,8 @@ function switchTab(tab) {
         holidays: '节假日管理',
         reminders: '提醒记录',
         reviews: '评价管理',
-        restrictions: '手机号限制'
+        restrictions: '手机号限制',
+        windows: '窗口管理'
     };
     document.getElementById('pageTitle').textContent = titles[tab];
 
@@ -158,6 +162,8 @@ function switchTab(tab) {
         loadReviews();
     } else if (tab === 'restrictions') {
         loadRestrictions();
+    } else if (tab === 'windows') {
+        loadWindows();
     }
 }
 
@@ -186,7 +192,7 @@ async function loadTodayAppointments() {
         const appointments = await res.json();
         renderTodayAppointments(appointments);
     } catch (e) {
-        document.getElementById('todayAppointments').innerHTML = '<tr><td colspan="7" class="loading">加载失败</td></tr>';
+        document.getElementById('todayAppointments').innerHTML = '<tr><td colspan="8" class="loading">加载失败</td></tr>';
     }
 }
 
@@ -196,7 +202,7 @@ function renderTodayAppointments(appointments) {
     if (appointments.length === 0) {
         tbody.innerHTML = `
             <tr>
-                <td colspan="7" class="empty-state">
+                <td colspan="8" class="empty-state">
                     <div class="empty-icon">📅</div>
                     <p>今日暂无预约</p>
                 </td>
@@ -210,6 +216,7 @@ function renderTodayAppointments(appointments) {
             <td>${apt.queue_number || '-'}</td>
             <td>${apt.time_slot}</td>
             <td>${apt.item_name}</td>
+            <td>${apt.window_name || '-'}</td>
             <td>${apt.user_name}</td>
             <td>${apt.phone}</td>
             <td><span class="status-badge ${getStatusClass(apt.status)}">${getStatusText(apt.status)}</span></td>
@@ -263,7 +270,7 @@ async function searchAppointments() {
         state.appointments = await res.json();
         renderAppointments(state.appointments);
     } catch (e) {
-        document.getElementById('appointmentList').innerHTML = '<tr><td colspan="9" class="loading">加载失败</td></tr>';
+        document.getElementById('appointmentList').innerHTML = '<tr><td colspan="10" class="loading">加载失败</td></tr>';
     }
 }
 
@@ -273,7 +280,7 @@ function renderAppointments(appointments) {
     if (appointments.length === 0) {
         tbody.innerHTML = `
             <tr>
-                <td colspan="9" class="empty-state">
+                <td colspan="10" class="empty-state">
                     <div class="empty-icon">🔍</div>
                     <p>暂无符合条件的预约记录</p>
                 </td>
@@ -288,6 +295,7 @@ function renderAppointments(appointments) {
             <td>${apt.appointment_date}</td>
             <td>${apt.time_slot}</td>
             <td>${apt.item_name}</td>
+            <td>${apt.window_name || '-'}</td>
             <td>${apt.user_name}</td>
             <td>${apt.phone}</td>
             <td><span class="status-badge ${getStatusClass(apt.status)}">${getStatusText(apt.status)}</span></td>
@@ -460,11 +468,13 @@ function renderItems() {
 function openAddItemModal() {
     state.editingItemId = null;
     state.editingMaterials = [];
+    state.editingItemWindows = [];
     document.getElementById('itemModalTitle').textContent = '新增事项';
     document.getElementById('itemName').value = '';
     document.getElementById('itemDesc').value = '';
     document.getElementById('itemMaxCount').value = 20;
     renderMaterialsList();
+    renderWindowConfigList();
     document.getElementById('itemModal').classList.add('show');
 }
 
@@ -486,7 +496,25 @@ async function editItem(id) {
         console.error('加载材料清单失败', e);
     }
 
+    try {
+        const winRes = await fetch(`${API_BASE}/items/${id}/windows`);
+        state.editingItemWindows = await winRes.json();
+    } catch (e) {
+        state.editingItemWindows = [];
+        console.error('加载窗口配置失败', e);
+    }
+
+    if (state.windows.length === 0) {
+        try {
+            const allWinRes = await fetch(`${API_BASE}/windows`);
+            state.windows = await allWinRes.json();
+        } catch (e) {
+            console.error('加载窗口列表失败', e);
+        }
+    }
+
     renderMaterialsList();
+    renderWindowConfigList();
     document.getElementById('itemModal').classList.add('show');
 }
 
@@ -540,6 +568,17 @@ async function saveItem() {
             if (!matRes.ok) {
                 throw new Error(matData.error || '材料清单保存失败');
             }
+        }
+
+        const itemId = state.editingItemId || itemData.id;
+        const winRes = await fetch(`${API_BASE}/items/${itemId}/windows`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ windows: state.editingItemWindows })
+        });
+        if (!winRes.ok) {
+            const winData = await winRes.json();
+            throw new Error(winData.error || '窗口配置保存失败');
         }
 
         showToast('保存成功', 'success');
@@ -604,6 +643,79 @@ function moveMaterial(index, direction) {
     state.editingMaterials[index] = state.editingMaterials[newIndex];
     state.editingMaterials[newIndex] = temp;
     renderMaterialsList();
+}
+
+function renderWindowConfigList() {
+    const container = document.getElementById('windowConfigList');
+
+    if (state.windows.length === 0) {
+        container.innerHTML = `
+            <div class="empty-state-sm">
+                <span>暂无可用窗口，请先在窗口管理中添加</span>
+            </div>
+        `;
+        return;
+    }
+
+    const activeWindows = state.windows.filter(w => w.status === 'active');
+    if (activeWindows.length === 0) {
+        container.innerHTML = `
+            <div class="empty-state-sm">
+                <span>暂无启用的窗口</span>
+            </div>
+        `;
+        return;
+    }
+
+    container.innerHTML = activeWindows.map(win => {
+        const itemWin = state.editingItemWindows.find(iw => iw.window_id === win.id);
+        const isChecked = !!itemWin;
+        const maxCount = itemWin ? (itemWin.default_max_count || '') : '';
+        return `
+            <div class="window-config-item" data-window-id="${win.id}">
+                <label class="window-config-checkbox">
+                    <input type="checkbox" ${isChecked ? 'checked' : ''} data-window-id="${win.id}">
+                    <span class="window-name">${escapeHtml(win.name)}</span>
+                </label>
+                <div class="window-config-input">
+                    <span>默认容量：</span>
+                    <input type="number" class="window-max-count" value="${maxCount}" placeholder="20" min="1" data-window-id="${win.id}" ${!isChecked ? 'disabled' : ''}>
+                </div>
+            </div>
+        `;
+    }).join('');
+
+    container.querySelectorAll('input[type="checkbox"]').forEach(checkbox => {
+        checkbox.addEventListener('change', (e) => {
+            const windowId = parseInt(e.target.dataset.windowId, 10);
+            const isChecked = e.target.checked;
+            const inputEl = container.querySelector(`.window-max-count[data-window-id="${windowId}"]`);
+
+            if (isChecked) {
+                const existing = state.editingItemWindows.find(iw => iw.window_id === windowId);
+                if (!existing) {
+                    state.editingItemWindows.push({ window_id: windowId, default_max_count: 20 });
+                }
+                inputEl.disabled = false;
+                if (!inputEl.value) {
+                    inputEl.value = 20;
+                }
+            } else {
+                state.editingItemWindows = state.editingItemWindows.filter(iw => iw.window_id !== windowId);
+                inputEl.disabled = true;
+            }
+        });
+    });
+
+    container.querySelectorAll('.window-max-count').forEach(input => {
+        input.addEventListener('input', (e) => {
+            const windowId = parseInt(e.target.dataset.windowId, 10);
+            const itemWin = state.editingItemWindows.find(iw => iw.window_id === windowId);
+            if (itemWin) {
+                itemWin.default_max_count = parseInt(e.target.value, 10) || 0;
+            }
+        });
+    });
 }
 
 function deleteItem(id) {
@@ -1289,6 +1401,159 @@ function deleteRestriction(id) {
     });
 }
 
+async function loadWindows() {
+    try {
+        const res = await fetch(`${API_BASE}/windows`);
+        state.windows = await res.json();
+        renderWindows();
+    } catch (e) {
+        document.getElementById('windowList').innerHTML = '<tr><td colspan="6" class="loading">加载失败</td></tr>';
+    }
+}
+
+function renderWindows() {
+    const tbody = document.getElementById('windowList');
+
+    if (state.windows.length === 0) {
+        tbody.innerHTML = `
+            <tr>
+                <td colspan="6" class="empty-state">
+                    <div class="empty-icon">🪟</div>
+                    <p>暂无窗口，请点击右上角新增</p>
+                </td>
+            </tr>
+        `;
+        return;
+    }
+
+    tbody.innerHTML = state.windows.map((win, index) => `
+        <tr>
+            <td>${index + 1}</td>
+            <td><strong>${escapeHtml(win.name)}</strong></td>
+            <td>${escapeHtml(win.description || '-')}</td>
+            <td>${win.sort_order || 0}</td>
+            <td>
+                <span class="status-badge ${win.status === 'active' ? 'status-completed' : 'status-cancelled'}">
+                    ${win.status === 'active' ? '启用' : '停用'}
+                </span>
+            </td>
+            <td>
+                <div class="action-buttons">
+                    <button class="btn btn-link" onclick="editWindow(${win.id})">编辑</button>
+                    <button class="btn btn-link ${win.status === 'active' ? 'danger' : ''}" onclick="toggleWindowStatus(${win.id}, '${win.status === 'active' ? 'inactive' : 'active'}')">
+                        ${win.status === 'active' ? '停用' : '启用'}
+                    </button>
+                    <button class="btn btn-link danger" onclick="deleteWindow(${win.id})">删除</button>
+                </div>
+            </td>
+        </tr>
+    `).join('');
+}
+
+function openAddWindowModal() {
+    state.editingWindowId = null;
+    document.getElementById('windowModalTitle').textContent = '新增窗口';
+    document.getElementById('windowName').value = '';
+    document.getElementById('windowDesc').value = '';
+    document.getElementById('windowSortOrder').value = 0;
+    document.getElementById('windowModal').classList.add('show');
+}
+
+async function editWindow(id) {
+    const win = state.windows.find(w => w.id === id);
+    if (!win) return;
+
+    state.editingWindowId = id;
+    document.getElementById('windowModalTitle').textContent = '编辑窗口';
+    document.getElementById('windowName').value = win.name;
+    document.getElementById('windowDesc').value = win.description || '';
+    document.getElementById('windowSortOrder').value = win.sort_order || 0;
+    document.getElementById('windowModal').classList.add('show');
+}
+
+async function saveWindow() {
+    const name = document.getElementById('windowName').value.trim();
+    const description = document.getElementById('windowDesc').value.trim();
+    const sortOrder = document.getElementById('windowSortOrder').value || 0;
+
+    if (!name) {
+        showToast('请输入窗口名称', 'error');
+        return;
+    }
+
+    try {
+        let res;
+        if (state.editingWindowId) {
+            res = await fetch(`${API_BASE}/windows/${state.editingWindowId}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name, description, sort_order: sortOrder })
+            });
+        } else {
+            res = await fetch(`${API_BASE}/windows`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name, description, sort_order: sortOrder })
+            });
+        }
+
+        const data = await res.json();
+        if (!res.ok) {
+            throw new Error(data.error || '保存失败');
+        }
+
+        showToast('保存成功', 'success');
+        document.getElementById('windowModal').classList.remove('show');
+        loadWindows();
+    } catch (e) {
+        showToast(e.message, 'error');
+    }
+}
+
+function deleteWindow(id) {
+    const win = state.windows.find(w => w.id === id);
+    showConfirm('确认删除', `确定删除窗口"${win.name}"吗？`, async () => {
+        try {
+            const res = await fetch(`${API_BASE}/windows/${id}`, {
+                method: 'DELETE'
+            });
+
+            if (!res.ok) {
+                throw new Error('删除失败');
+            }
+
+            showToast('删除成功', 'success');
+            loadWindows();
+        } catch (e) {
+            showToast(e.message, 'error');
+        }
+    });
+}
+
+async function toggleWindowStatus(id, status) {
+    const win = state.windows.find(w => w.id === id);
+    const action = status === 'active' ? '启用' : '停用';
+    showConfirm(`确认${action}`, `确定${action}窗口"${win.name}"吗？`, async () => {
+        try {
+            const res = await fetch(`${API_BASE}/windows/${id}/status`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ status })
+            });
+
+            const data = await res.json();
+            if (!res.ok) {
+                throw new Error(data.error || '操作失败');
+            }
+
+            showToast(action + '成功', 'success');
+            loadWindows();
+        } catch (e) {
+            showToast(e.message, 'error');
+        }
+    });
+}
+
 function openSlotModal(itemId, itemName) {
     const today = formatDate(new Date());
     state.slotModalData = { itemId, itemName, date: today };
@@ -1424,6 +1689,12 @@ function initModals() {
     });
     document.getElementById('btnSaveRestriction').addEventListener('click', saveRestriction);
 
+    document.getElementById('btnAddWindow').addEventListener('click', openAddWindowModal);
+    document.getElementById('btnCancelWindow').addEventListener('click', () => {
+        document.getElementById('windowModal').classList.remove('show');
+    });
+    document.getElementById('btnSaveWindow').addEventListener('click', saveWindow);
+
     document.getElementById('btnSearchRestriction').addEventListener('click', () => {
         state.restrictionPage = 1;
         searchRestrictions();
@@ -1470,5 +1741,8 @@ window.goToReviewPage = goToReviewPage;
 window.editRestriction = editRestriction;
 window.deleteRestriction = deleteRestriction;
 window.goToRestrictionPage = goToRestrictionPage;
+window.editWindow = editWindow;
+window.deleteWindow = deleteWindow;
+window.toggleWindowStatus = toggleWindowStatus;
 
 document.addEventListener('DOMContentLoaded', init);

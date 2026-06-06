@@ -328,6 +328,7 @@ function renderSuccess(appointment) {
     details.innerHTML = `
         <p><strong>预约编号：</strong>${appointment.id}</p>
         <p><strong>办理事项：</strong>${state.selectedItem.name}</p>
+        <p><strong>办理窗口：</strong>${appointment.window_name || '系统分配'}</p>
         <p><strong>预约姓名：</strong>${appointment.user_name}</p>
         <p><strong>联系电话：</strong>${appointment.phone}</p>
         <p><strong>预约日期：</strong>${appointment.appointment_date}</p>
@@ -577,6 +578,10 @@ function renderAppointmentDetail(appointment, materials = []) {
             <div class="detail-row">
                 <span class="detail-label">办理事项</span>
                 <span class="detail-value">${appointment.item_name || ''}</span>
+            </div>
+            <div class="detail-row">
+                <span class="detail-label">办理窗口</span>
+                <span class="detail-value">${appointment.window_name || '系统分配'}</span>
             </div>
             <div class="detail-row">
                 <span class="detail-label">预约姓名</span>
