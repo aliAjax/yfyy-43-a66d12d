@@ -49,6 +49,17 @@ db.exec(`
     FOREIGN KEY (item_id) REFERENCES items(id)
   );
 
+  CREATE TABLE IF NOT EXISTS item_materials (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_materials_item ON item_materials(item_id);
   CREATE INDEX IF NOT EXISTS idx_appointments_phone_item ON appointments(phone, item_id);
   CREATE INDEX IF NOT EXISTS idx_appointments_date ON appointments(appointment_date);
 `);
@@ -130,7 +141,142 @@ app.delete('/api/items/:id', (req, res) => {
   db.prepare('DELETE FROM items WHERE id = ?').run(id);
   db.prepare('DELETE FROM daily_slots WHERE item_id = ?').run(id);
   db.prepare('DELETE FROM appointments WHERE item_id = ?').run(id);
+  db.prepare('DELETE FROM item_materials WHERE item_id = ?').run(id);
   res.json({ success: true });
+});
+
+app.get('/api/items/:id/materials', (req, res) => {
+  const { id } = req.params;
+  const materials = db.prepare(
+    'SELECT * FROM item_materials WHERE item_id = ? ORDER BY sort_order ASC, id ASC'
+  ).all(id);
+  res.json(materials);
+});
+
+app.post('/api/items/:id/materials', (req, res) => {
+  const { id } = req.params;
+  const { name, description, sort_order } = req.body;
+
+  if (!name || !name.trim()) {
+    return res.status(400).json({ error: '材料名称不能为空' });
+  }
+
+  const item = db.prepare('SELECT id FROM items WHERE id = ?').get(id);
+  if (!item) {
+    return res.status(404).json({ error: '事项不存在' });
+  }
+
+  const order = sort_order !== undefined ? parseInt(sort_order) || 0 : 0;
+  const result = db.prepare(
+    'INSERT INTO item_materials (item_id, name, description, sort_order) VALUES (?, ?, ?, ?)'
+  ).run(id, name.trim(), description || '', order);
+
+  res.json({
+    id: result.lastInsertRowid,
+    item_id: parseInt(id),
+    name: name.trim(),
+    description: description || '',
+    sort_order: order
+  });
+});
+
+app.put('/api/materials/:id', (req, res) => {
+  const { id } = req.params;
+  const { name, description, sort_order } = req.body;
+
+  const material = db.prepare('SELECT * FROM item_materials WHERE id = ?').get(id);
+  if (!material) {
+    return res.status(404).json({ error: '材料不存在' });
+  }
+
+  if (name !== undefined && !name.trim()) {
+    return res.status(400).json({ error: '材料名称不能为空' });
+  }
+
+  const newName = name !== undefined ? name.trim() : material.name;
+  const newDesc = description !== undefined ? description : material.description;
+  const newOrder = sort_order !== undefined ? parseInt(sort_order) || 0 : material.sort_order;
+
+  db.prepare(
+    'UPDATE item_materials SET name = ?, description = ?, sort_order = ? WHERE id = ?'
+  ).run(newName, newDesc, newOrder, id);
+
+  res.json({
+    id: parseInt(id),
+    item_id: material.item_id,
+    name: newName,
+    description: newDesc,
+    sort_order: newOrder
+  });
+});
+
+app.delete('/api/materials/:id', (req, res) => {
+  const { id } = req.params;
+  const material = db.prepare('SELECT id FROM item_materials WHERE id = ?').get(id);
+  if (!material) {
+    return res.status(404).json({ error: '材料不存在' });
+  }
+  db.prepare('DELETE FROM item_materials WHERE id = ?').run(id);
+  res.json({ success: true });
+});
+
+app.put('/api/items/:id/materials/batch', (req, res) => {
+  const { id } = req.params;
+  const { materials } = req.body;
+
+  const item = db.prepare('SELECT id FROM items WHERE id = ?').get(id);
+  if (!item) {
+    return res.status(404).json({ error: '事项不存在' });
+  }
+
+  if (!Array.isArray(materials)) {
+    return res.status(400).json({ error: '材料数据格式错误' });
+  }
+
+  const insertStmt = db.prepare(
+    'INSERT INTO item_materials (item_id, name, description, sort_order) VALUES (?, ?, ?, ?)'
+  );
+  const updateStmt = db.prepare(
+    'UPDATE item_materials SET name = ?, description = ?, sort_order = ? WHERE id = ?'
+  );
+  const deleteStmt = db.prepare('DELETE FROM item_materials WHERE id = ?');
+
+  const existingIds = new Set(
+    db.prepare('SELECT id FROM item_materials WHERE item_id = ?').all(id).map(m => m.id)
+  );
+
+  const tx = db.transaction(() => {
+    materials.forEach((mat, index) => {
+      if (mat.id && existingIds.has(mat.id)) {
+        updateStmt.run(
+          mat.name?.trim() || '',
+          mat.description || '',
+          index,
+          mat.id
+        );
+        existingIds.delete(mat.id);
+      } else {
+        insertStmt.run(
+          id,
+          mat.name?.trim() || '',
+          mat.description || '',
+          index
+        );
+      }
+    });
+
+    existingIds.forEach(remainingId => {
+      deleteStmt.run(remainingId);
+    });
+  });
+
+  tx();
+
+  const updatedMaterials = db.prepare(
+    'SELECT * FROM item_materials WHERE item_id = ? ORDER BY sort_order ASC, id ASC'
+  ).all(id);
+
+  res.json(updatedMaterials);
 });
 
 app.get('/api/holidays', (req, res) => {

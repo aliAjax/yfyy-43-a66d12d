@@ -490,6 +490,137 @@ h2 {
     margin: 4px 0;
 }
 
+.material-tips-list {
+    margin-top: 8px;
+    padding-left: 20px;
+}
+
+.material-tips-list li {
+    margin: 6px 0;
+}
+
+.tip-material-name {
+    font-weight: 500;
+    color: #744210;
+}
+
+.tip-material-desc {
+    color: #975a16;
+    font-size: 12px;
+}
+
+.materials-section {
+    margin-bottom: 24px;
+    padding: 16px;
+    background: #f8f9ff;
+    border-radius: 12px;
+    border: 1px solid #e8ebff;
+}
+
+.materials-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: #333;
+    margin-bottom: 12px;
+}
+
+.materials-list-box {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.material-item-citizen {
+    display: flex;
+    gap: 12px;
+    padding: 10px 12px;
+    background: white;
+    border-radius: 8px;
+    border: 1px solid #e8ebff;
+}
+
+.material-index {
+    flex-shrink: 0;
+    width: 24px;
+    height: 24px;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.material-content {
+    flex: 1;
+}
+
+.material-name-citizen {
+    font-size: 14px;
+    font-weight: 500;
+    color: #333;
+    margin-bottom: 2px;
+}
+
+.material-desc-citizen {
+    font-size: 12px;
+    color: #888;
+    line-height: 1.5;
+}
+
+.detail-materials {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px dashed #e8e8e8;
+}
+
+.detail-materials-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: #333;
+    margin-bottom: 8px;
+}
+
+.detail-materials-list {
+    padding-left: 18px;
+    margin: 0;
+}
+
+.detail-materials-list li {
+    margin: 4px 0;
+    font-size: 13px;
+    color: #555;
+}
+
+.detail-material-name {
+    font-weight: 500;
+    color: #333;
+}
+
+.detail-material-desc {
+    color: #999;
+    font-size: 12px;
+    margin-left: 4px;
+}
+
+.empty-state-mini {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px;
+    background: white;
+    border-radius: 8px;
+    border: 1px dashed #d0d3e8;
+    color: #888;
+    font-size: 13px;
+}
+
+.empty-icon-mini {
+    font-size: 18px;
+}
+
 .footer {
     text-align: center;
     color: rgba(255, 255, 255, 0.8);

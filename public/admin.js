@@ -4,6 +4,7 @@ const state = {
     appointments: [],
     holidays: [],
     editingItemId: null,
+    editingMaterials: [],
     slotModalData: null,
     confirmCallback: null
 };
@@ -338,14 +339,16 @@ function renderItems() {
 
 function openAddItemModal() {
     state.editingItemId = null;
+    state.editingMaterials = [];
     document.getElementById('itemModalTitle').textContent = '新增事项';
     document.getElementById('itemName').value = '';
     document.getElementById('itemDesc').value = '';
     document.getElementById('itemMaxCount').value = 20;
+    renderMaterialsList();
     document.getElementById('itemModal').classList.add('show');
 }
 
-function editItem(id) {
+async function editItem(id) {
     const item = state.items.find(i => i.id === id);
     if (!item) return;
 
@@ -354,6 +357,16 @@ function editItem(id) {
     document.getElementById('itemName').value = item.name;
     document.getElementById('itemDesc').value = item.description || '';
     document.getElementById('itemMaxCount').value = item.default_max_count || 20;
+
+    try {
+        const res = await fetch(`${API_BASE}/items/${id}/materials`);
+        state.editingMaterials = await res.json();
+    } catch (e) {
+        state.editingMaterials = [];
+        console.error('加载材料清单失败', e);
+    }
+
+    renderMaterialsList();
     document.getElementById('itemModal').classList.add('show');
 }
 
@@ -367,8 +380,15 @@ async function saveItem() {
         return;
     }
 
+    const validMaterials = state.editingMaterials.filter(m => m.name && m.name.trim());
+    if (validMaterials.length !== state.editingMaterials.length) {
+        showToast('请填写所有材料名称或删除空行', 'error');
+        return;
+    }
+
     try {
         let res;
+        let itemData;
         if (state.editingItemId) {
             res = await fetch(`${API_BASE}/items/${state.editingItemId}`, {
                 method: 'PUT',
@@ -387,6 +407,16 @@ async function saveItem() {
         if (!res.ok) {
             throw new Error(data.error || '保存失败');
         }
+        itemData = data;
+
+        if (state.editingMaterials.length > 0 || state.editingItemId) {
+            const itemId = state.editingItemId || itemData.id;
+            await fetch(`${API_BASE}/items/${itemId}/materials/batch`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ materials: state.editingMaterials })
+            });
+        }
 
         showToast('保存成功', 'success');
         document.getElementById('itemModal').classList.remove('show');
@@ -394,6 +424,62 @@ async function saveItem() {
     } catch (e) {
         showToast(e.message, 'error');
     }
+}
+
+function renderMaterialsList() {
+    const container = document.getElementById('materialsList');
+
+    if (state.editingMaterials.length === 0) {
+        container.innerHTML = `
+            <div class="empty-state-sm">
+                <span>暂无材料，点击上方按钮添加</span>
+            </div>
+        `;
+        return;
+    }
+
+    container.innerHTML = state.editingMaterials.map((mat, index) => `
+        <div class="material-item" data-index="${index}">
+            <div class="material-sort">
+                <button type="button" class="sort-btn" onclick="moveMaterial(${index}, -1)" ${index === 0 ? 'disabled' : ''}>↑</button>
+                <button type="button" class="sort-btn" onclick="moveMaterial(${index}, 1)" ${index === state.editingMaterials.length - 1 ? 'disabled' : ''}>↓</button>
+            </div>
+            <div class="material-fields">
+                <input type="text" class="material-name" placeholder="材料名称" value="${escapeHtml(mat.name || '')}" data-field="name">
+                <input type="text" class="material-desc" placeholder="材料说明（选填）" value="${escapeHtml(mat.description || '')}" data-field="description">
+            </div>
+            <button type="button" class="material-delete" onclick="removeMaterial(${index})">×</button>
+        </div>
+    `).join('');
+
+    container.querySelectorAll('.material-item').forEach(item => {
+        const index = parseInt(item.dataset.index);
+        item.querySelectorAll('input').forEach(input => {
+            input.addEventListener('input', (e) => {
+                const field = e.target.dataset.field;
+                state.editingMaterials[index][field] = e.target.value;
+            });
+        });
+    });
+}
+
+function addMaterial() {
+    state.editingMaterials.push({ name: '', description: '' });
+    renderMaterialsList();
+}
+
+function removeMaterial(index) {
+    state.editingMaterials.splice(index, 1);
+    renderMaterialsList();
+}
+
+function moveMaterial(index, direction) {
+    const newIndex = index + direction;
+    if (newIndex < 0 || newIndex >= state.editingMaterials.length) return;
+    const temp = state.editingMaterials[index];
+    state.editingMaterials[index] = state.editingMaterials[newIndex];
+    state.editingMaterials[newIndex] = temp;
+    renderMaterialsList();
 }
 
 function deleteItem(id) {
@@ -584,6 +670,7 @@ function initModals() {
         document.getElementById('itemModal').classList.remove('show');
     });
     document.getElementById('btnSaveItem').addEventListener('click', saveItem);
+    document.getElementById('btnAddMaterial').addEventListener('click', addMaterial);
 
     document.getElementById('btnAddHoliday').addEventListener('click', openAddHolidayModal);
     document.getElementById('btnCancelHoliday').addEventListener('click', () => {
@@ -646,5 +733,8 @@ window.editItem = editItem;
 window.deleteItem = deleteItem;
 window.deleteHoliday = deleteHoliday;
 window.openSlotModal = openSlotModal;
+window.addMaterial = addMaterial;
+window.removeMaterial = removeMaterial;
+window.moveMaterial = moveMaterial;
 
 document.addEventListener('DOMContentLoaded', init);

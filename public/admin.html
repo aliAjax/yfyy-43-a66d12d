@@ -223,6 +223,17 @@
                 <input type="number" id="itemMaxCount" value="20" min="1" max="100">
                 <small class="form-tip">可在预约管理中单独调整某日的号源数量</small>
             </div>
+            <div class="form-group">
+                <div class="materials-header">
+                    <label>所需材料清单</label>
+                    <button type="button" class="btn btn-sm btn-primary" id="btnAddMaterial">+ 添加材料</button>
+                </div>
+                <div class="materials-list" id="materialsList">
+                    <div class="empty-state-sm">
+                        <span>暂无材料，点击上方按钮添加</span>
+                    </div>
+                </div>
+            </div>
             <div class="modal-actions">
                 <button class="btn btn-secondary" id="btnCancelItem">取消</button>
                 <button class="btn btn-primary" id="btnSaveItem">保存</button>

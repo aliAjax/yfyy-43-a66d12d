@@ -1,6 +1,7 @@
 const state = {
     items: [],
     selectedItem: null,
+    selectedItemMaterials: [],
     selectedDate: null,
     selectedTimeSlot: null,
     currentWeekOffset: 0,
@@ -8,6 +9,15 @@ const state = {
 };
 
 const API_BASE = '/api';
+
+function escapeHtml(value) {
+    return String(value || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
 
 function showToast(message, type = 'info') {
     const toast = document.createElement('div');
@@ -47,10 +57,19 @@ function renderItems() {
     `).join('');
 
     container.querySelectorAll('.item-card').forEach(card => {
-        card.addEventListener('click', () => {
+        card.addEventListener('click', async () => {
             const id = parseInt(card.dataset.id);
             state.selectedItem = state.items.find(i => i.id === id);
+            state.selectedItemMaterials = [];
             renderItems();
+
+            try {
+                const res = await fetch(`${API_BASE}/items/${id}/materials`);
+                state.selectedItemMaterials = await res.json();
+            } catch (e) {
+                console.error('加载材料清单失败', e);
+            }
+
             setTimeout(() => goToStep(2), 300);
         });
     });
@@ -68,6 +87,7 @@ function goToStep(stepNum) {
 
     if (stepNum === 2) {
         renderSelectedItemInfo();
+        renderMaterialsBox();
         renderDateGrid();
     }
     if (stepNum === 3) {
@@ -82,6 +102,33 @@ function renderSelectedItemInfo() {
             <span style="color:#999; margin-left:10px;">${state.selectedItem.description || ''}</span>
         `;
     }
+}
+
+function renderMaterialsBox() {
+    const section = document.getElementById('materialsSection');
+    const box = document.getElementById('materialsListBox');
+
+    section.style.display = 'block';
+
+    if (state.selectedItemMaterials.length === 0) {
+        box.innerHTML = `
+            <div class="empty-state-mini">
+                <span class="empty-icon-mini">📄</span>
+                <span>该事项暂无特殊材料要求，请携带本人有效身份证件</span>
+            </div>
+        `;
+        return;
+    }
+
+    box.innerHTML = state.selectedItemMaterials.map((mat, index) => `
+        <div class="material-item-citizen">
+            <div class="material-index">${index + 1}</div>
+            <div class="material-content">
+                <div class="material-name-citizen">${escapeHtml(mat.name)}</div>
+                ${mat.description ? `<div class="material-desc-citizen">${escapeHtml(mat.description)}</div>` : ''}
+            </div>
+        </div>
+    `).join('');
 }
 
 function getWeekDates(offset = 0) {
@@ -284,6 +331,36 @@ function renderSuccess(appointment) {
         <p><strong>预约日期：</strong>${appointment.appointment_date}</p>
         <p><strong>预约时段：</strong>${appointment.time_slot}</p>
     `;
+
+    const tips = document.querySelector('.tips');
+    if (state.selectedItemMaterials.length > 0) {
+        tips.innerHTML = `
+            <p><strong>📋 所需材料清单：</strong></p>
+            <ul class="material-tips-list">
+                ${state.selectedItemMaterials.map(m => `
+                    <li>
+                        <span class="tip-material-name">${escapeHtml(m.name)}</span>
+                        ${m.description ? `<span class="tip-material-desc">（${escapeHtml(m.description)}）</span>` : ''}
+                    </li>
+                `).join('')}
+            </ul>
+            <p style="margin-top:12px;"><strong>温馨提示：</strong></p>
+            <ul>
+                <li>请您在预约时段前10分钟到达办事大厅</li>
+                <li>请务必携带好上述材料，以免影响办理</li>
+                <li>如需取消预约，可通过首页"查询/取消预约"功能凭预约编号和手机号在线取消</li>
+            </ul>
+        `;
+    } else {
+        tips.innerHTML = `
+            <p><strong>温馨提示：</strong></p>
+            <ul>
+                <li>请您在预约时段前10分钟到达办事大厅</li>
+                <li>请携带好相关证件和材料</li>
+                <li>如需取消预约，可通过首页"查询/取消预约"功能凭预约编号和手机号在线取消</li>
+            </ul>
+        `;
+    }
 }
 
 function resetBooking() {
@@ -395,7 +472,16 @@ async function submitQuery() {
         }
 
         state.currentAppointment = data;
-        renderAppointmentDetail(data);
+
+        let materials = [];
+        try {
+            const matRes = await fetch(`${API_BASE}/items/${data.item_id}/materials`);
+            materials = await matRes.json();
+        } catch (e) {
+            console.error('加载材料清单失败', e);
+        }
+
+        renderAppointmentDetail(data, materials);
 
         document.getElementById('queryForm').style.display = 'none';
         document.getElementById('queryResult').style.display = 'block';
@@ -407,10 +493,24 @@ async function submitQuery() {
     }
 }
 
-function renderAppointmentDetail(appointment) {
+function renderAppointmentDetail(appointment, materials = []) {
     const statusText = getStatusText(appointment.status);
     const statusClass = getStatusClass(appointment.status);
     const canCancel = appointment.status === 'pending';
+
+    const materialsHtml = materials.length > 0 ? `
+        <div class="detail-materials">
+            <div class="detail-materials-title">📋 所需材料清单</div>
+            <ul class="detail-materials-list">
+                ${materials.map(m => `
+                    <li>
+                        <span class="detail-material-name">${escapeHtml(m.name)}</span>
+                        ${m.description ? `<span class="detail-material-desc">${escapeHtml(m.description)}</span>` : ''}
+                    </li>
+                `).join('')}
+            </ul>
+        </div>
+    ` : '';
 
     const detailHtml = `
         <div class="detail-header">
@@ -446,6 +546,7 @@ function renderAppointmentDetail(appointment) {
                 <span class="detail-label">提交时间</span>
                 <span class="detail-value">${appointment.created_at || ''}</span>
             </div>
+            ${materialsHtml}
         </div>
         ${canCancel ? '<div class="detail-tip">💡 该预约处于待办理状态，您可以在线取消</div>' : ''}
         ${appointment.status === 'cancelled' ? '<div class="detail-tip detail-tip-muted">该预约已取消，号源已释放</div>' : ''}
