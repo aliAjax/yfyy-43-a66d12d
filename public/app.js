@@ -3,7 +3,8 @@ const state = {
     selectedItem: null,
     selectedDate: null,
     selectedTimeSlot: null,
-    currentWeekOffset: 0
+    currentWeekOffset: 0,
+    currentAppointment: null
 };
 
 const API_BASE = '/api';
@@ -331,9 +332,224 @@ function initEvents() {
     });
 }
 
+function getStatusText(status) {
+    const statusMap = {
+        'pending': '待办理',
+        'arrived': '已签到',
+        'completed': '已完成',
+        'cancelled': '已取消'
+    };
+    return statusMap[status] || status;
+}
+
+function getStatusClass(status) {
+    const classMap = {
+        'pending': 'status-pending',
+        'arrived': 'status-arrived',
+        'completed': 'status-completed',
+        'cancelled': 'status-cancelled'
+    };
+    return classMap[status] || '';
+}
+
+function openQueryModal() {
+    document.getElementById('queryModal').classList.add('show');
+    document.getElementById('queryForm').style.display = 'block';
+    document.getElementById('queryResult').style.display = 'none';
+    document.getElementById('queryId').value = '';
+    document.getElementById('queryPhone').value = '';
+    state.currentAppointment = null;
+}
+
+function closeQueryModal() {
+    document.getElementById('queryModal').classList.remove('show');
+}
+
+async function submitQuery() {
+    const id = document.getElementById('queryId').value.trim();
+    const phone = document.getElementById('queryPhone').value.trim();
+
+    if (!id) {
+        showToast('请输入预约编号', 'error');
+        return;
+    }
+    if (!phone) {
+        showToast('请输入手机号', 'error');
+        return;
+    }
+    if (!/^1[3-9]\d{9}$/.test(phone)) {
+        showToast('请输入正确的手机号', 'error');
+        return;
+    }
+
+    const submitBtn = document.getElementById('submitQuery');
+    submitBtn.disabled = true;
+    submitBtn.textContent = '查询中...';
+
+    try {
+        const res = await fetch(`${API_BASE}/appointments/query?id=${encodeURIComponent(id)}&phone=${encodeURIComponent(phone)}`);
+        const data = await res.json();
+
+        if (!res.ok) {
+            throw new Error(data.error || '查询失败');
+        }
+
+        state.currentAppointment = data;
+        renderAppointmentDetail(data);
+
+        document.getElementById('queryForm').style.display = 'none';
+        document.getElementById('queryResult').style.display = 'block';
+    } catch (e) {
+        showToast(e.message, 'error');
+    } finally {
+        submitBtn.disabled = false;
+        submitBtn.textContent = '查询预约';
+    }
+}
+
+function renderAppointmentDetail(appointment) {
+    const statusText = getStatusText(appointment.status);
+    const statusClass = getStatusClass(appointment.status);
+    const canCancel = appointment.status === 'pending';
+
+    const detailHtml = `
+        <div class="detail-header">
+            <span class="detail-title">预约详情</span>
+            <span class="status-badge ${statusClass}">${statusText}</span>
+        </div>
+        <div class="detail-body">
+            <div class="detail-row">
+                <span class="detail-label">预约编号</span>
+                <span class="detail-value">${appointment.id}</span>
+            </div>
+            <div class="detail-row">
+                <span class="detail-label">办理事项</span>
+                <span class="detail-value">${appointment.item_name || ''}</span>
+            </div>
+            <div class="detail-row">
+                <span class="detail-label">预约姓名</span>
+                <span class="detail-value">${appointment.user_name}</span>
+            </div>
+            <div class="detail-row">
+                <span class="detail-label">联系电话</span>
+                <span class="detail-value">${appointment.phone}</span>
+            </div>
+            <div class="detail-row">
+                <span class="detail-label">预约日期</span>
+                <span class="detail-value">${appointment.appointment_date}</span>
+            </div>
+            <div class="detail-row">
+                <span class="detail-label">预约时段</span>
+                <span class="detail-value">${appointment.time_slot}</span>
+            </div>
+            <div class="detail-row">
+                <span class="detail-label">提交时间</span>
+                <span class="detail-value">${appointment.created_at || ''}</span>
+            </div>
+        </div>
+        ${canCancel ? '<div class="detail-tip">💡 该预约处于待办理状态，您可以在线取消</div>' : ''}
+        ${appointment.status === 'cancelled' ? '<div class="detail-tip detail-tip-muted">该预约已取消，号源已释放</div>' : ''}
+        ${appointment.status === 'completed' ? '<div class="detail-tip detail-tip-muted">该预约已完成</div>' : ''}
+        ${appointment.status === 'arrived' ? '<div class="detail-tip detail-tip-muted">该预约已签到，请到窗口办理</div>' : ''}
+    `;
+
+    document.getElementById('appointmentDetail').innerHTML = detailHtml;
+
+    const cancelBtn = document.getElementById('cancelAppointmentBtn');
+    if (canCancel) {
+        cancelBtn.style.display = 'block';
+    } else {
+        cancelBtn.style.display = 'none';
+    }
+}
+
+function backToQuery() {
+    document.getElementById('queryForm').style.display = 'block';
+    document.getElementById('queryResult').style.display = 'none';
+    state.currentAppointment = null;
+}
+
+function openConfirmCancel() {
+    document.getElementById('confirmCancelModal').classList.add('show');
+}
+
+function closeConfirmCancel() {
+    document.getElementById('confirmCancelModal').classList.remove('show');
+}
+
+async function confirmCancelAppointment() {
+    if (!state.currentAppointment) return;
+
+    const confirmBtn = document.getElementById('confirmCancelBtn');
+    confirmBtn.disabled = true;
+    confirmBtn.textContent = '取消中...';
+
+    try {
+        const res = await fetch(`${API_BASE}/appointments/${state.currentAppointment.id}/cancel`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                phone: state.currentAppointment.phone
+            })
+        });
+
+        const data = await res.json();
+
+        if (!res.ok) {
+            throw new Error(data.error || '取消失败');
+        }
+
+        showToast('预约已取消，号源已释放', 'success');
+        closeConfirmCancel();
+
+        state.currentAppointment.status = 'cancelled';
+        renderAppointmentDetail(state.currentAppointment);
+    } catch (e) {
+        showToast(e.message, 'error');
+    } finally {
+        confirmBtn.disabled = false;
+        confirmBtn.textContent = '确认取消';
+    }
+}
+
+function initQueryEvents() {
+    document.getElementById('openQueryBtn').addEventListener('click', openQueryModal);
+    document.getElementById('closeQueryModal').addEventListener('click', closeQueryModal);
+    document.getElementById('submitQuery').addEventListener('click', submitQuery);
+    document.getElementById('backToQuery').addEventListener('click', backToQuery);
+    document.getElementById('cancelAppointmentBtn').addEventListener('click', openConfirmCancel);
+    document.getElementById('cancelCancelBtn').addEventListener('click', closeConfirmCancel);
+    document.getElementById('confirmCancelBtn').addEventListener('click', confirmCancelAppointment);
+
+    document.getElementById('queryModal').addEventListener('click', (e) => {
+        if (e.target.id === 'queryModal') {
+            closeQueryModal();
+        }
+    });
+
+    document.getElementById('confirmCancelModal').addEventListener('click', (e) => {
+        if (e.target.id === 'confirmCancelModal') {
+            closeConfirmCancel();
+        }
+    });
+
+    document.getElementById('queryId').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            document.getElementById('queryPhone').focus();
+        }
+    });
+
+    document.getElementById('queryPhone').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            submitQuery();
+        }
+    });
+}
+
 function init() {
     loadItems();
     initEvents();
+    initQueryEvents();
 }
 
 document.addEventListener('DOMContentLoaded', init);

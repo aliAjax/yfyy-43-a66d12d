@@ -347,6 +347,68 @@ app.get('/api/appointments', (req, res) => {
   res.json(appointments);
 });
 
+app.get('/api/appointments/query', (req, res) => {
+  const { id, phone } = req.query;
+
+  if (!id || !phone) {
+    return res.status(400).json({ error: '请提供预约编号和手机号' });
+  }
+
+  const appointment = db.prepare(`
+    SELECT a.*, i.name as item_name, i.description as item_description
+    FROM appointments a
+    LEFT JOIN items i ON a.item_id = i.id
+    WHERE a.id = ? AND a.phone = ?
+  `).get(id, phone);
+
+  if (!appointment) {
+    return res.status(404).json({ error: '未找到对应的预约记录，请检查预约编号和手机号' });
+  }
+
+  res.json(appointment);
+});
+
+app.post('/api/appointments/:id/cancel', (req, res) => {
+  const { id } = req.params;
+  const { phone } = req.body;
+
+  if (!phone) {
+    return res.status(400).json({ error: '请提供手机号' });
+  }
+
+  const appointment = db.prepare('SELECT * FROM appointments WHERE id = ?').get(id);
+  if (!appointment) {
+    return res.status(404).json({ error: '预约不存在' });
+  }
+
+  if (appointment.phone !== phone) {
+    return res.status(403).json({ error: '手机号不匹配，无权取消该预约' });
+  }
+
+  if (appointment.status === 'cancelled') {
+    return res.status(400).json({ error: '该预约已取消' });
+  }
+
+  if (appointment.status !== 'pending') {
+    return res.status(400).json({ error: '只有待办理状态的预约才能取消' });
+  }
+
+  const appointmentDate = new Date(appointment.appointment_date);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  if (appointmentDate < today) {
+    return res.status(400).json({ error: '已过期的预约不能取消' });
+  }
+
+  db.prepare('UPDATE appointments SET status = ? WHERE id = ?').run('cancelled', id);
+
+  db.prepare(
+    'UPDATE daily_slots SET current_count = current_count - 1 WHERE item_id = ? AND date = ?'
+  ).run(appointment.item_id, appointment.appointment_date);
+
+  res.json({ success: true, message: '预约已取消，号源已释放' });
+});
+
 app.put('/api/appointments/:id/status', (req, res) => {
   const { id } = req.params;
   const { status } = req.body;
