@@ -411,11 +411,15 @@ async function saveItem() {
 
         if (state.editingMaterials.length > 0 || state.editingItemId) {
             const itemId = state.editingItemId || itemData.id;
-            await fetch(`${API_BASE}/items/${itemId}/materials/batch`, {
+            const matRes = await fetch(`${API_BASE}/items/${itemId}/materials/batch`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ materials: state.editingMaterials })
             });
+            const matData = await matRes.json();
+            if (!matRes.ok) {
+                throw new Error(matData.error || '材料清单保存失败');
+            }
         }
 
         showToast('保存成功', 'success');

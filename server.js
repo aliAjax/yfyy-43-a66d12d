@@ -233,6 +233,13 @@ app.put('/api/items/:id/materials/batch', (req, res) => {
     return res.status(400).json({ error: '材料数据格式错误' });
   }
 
+  for (let i = 0; i < materials.length; i++) {
+    const mat = materials[i];
+    if (!mat.name || !mat.name.trim()) {
+      return res.status(400).json({ error: `第 ${i + 1} 条材料名称不能为空` });
+    }
+  }
+
   const insertStmt = db.prepare(
     'INSERT INTO item_materials (item_id, name, description, sort_order) VALUES (?, ?, ?, ?)'
   );
