@@ -569,7 +569,7 @@ app.post('/api/appointments', (req, res) => {
 
   const existingActive = db.prepare(
     `SELECT id, appointment_date FROM appointments 
-     WHERE phone = ? AND item_id = ? AND status IN ('pending', 'arrived')
+     WHERE phone = ? AND item_id = ? AND status IN ('pending', 'arrived', 'calling')
      ORDER BY appointment_date ASC
      LIMIT 1`
   ).get(phone, item_id);
