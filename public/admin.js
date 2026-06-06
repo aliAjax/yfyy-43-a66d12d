@@ -304,6 +304,7 @@ function renderItems() {
             <td>${index + 1}</td>
             <td><strong>${item.name}</strong></td>
             <td>${item.description || '-'}</td>
+            <td><span class="status-badge status-pending">${item.default_max_count || 20} 个</span></td>
             <td>${item.created_at ? item.created_at.substring(0, 10) : '-'}</td>
             <td>
                 <div class="action-buttons">
@@ -332,13 +333,14 @@ function editItem(id) {
     document.getElementById('itemModalTitle').textContent = '编辑事项';
     document.getElementById('itemName').value = item.name;
     document.getElementById('itemDesc').value = item.description || '';
-    document.getElementById('itemMaxCount').value = 20;
+    document.getElementById('itemMaxCount').value = item.default_max_count || 20;
     document.getElementById('itemModal').classList.add('show');
 }
 
 async function saveItem() {
     const name = document.getElementById('itemName').value.trim();
     const description = document.getElementById('itemDesc').value.trim();
+    const defaultMaxCount = document.getElementById('itemMaxCount').value;
 
     if (!name) {
         showToast('请输入事项名称', 'error');
@@ -351,13 +353,13 @@ async function saveItem() {
             res = await fetch(`${API_BASE}/items/${state.editingItemId}`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name, description })
+                body: JSON.stringify({ name, description, default_max_count: defaultMaxCount })
             });
         } else {
             res = await fetch(`${API_BASE}/items`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name, description })
+                body: JSON.stringify({ name, description, default_max_count: defaultMaxCount })
             });
         }
 

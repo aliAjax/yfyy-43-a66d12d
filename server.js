@@ -17,6 +17,7 @@ db.exec(`
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
     description TEXT,
+    default_max_count INTEGER NOT NULL DEFAULT 20,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
 
@@ -52,6 +53,36 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_appointments_date ON appointments(appointment_date);
 `);
 
+const columns = db.prepare("PRAGMA table_info(items)").all();
+const hasDefaultMaxCount = columns.some(c => c.name === 'default_max_count');
+if (!hasDefaultMaxCount) {
+  db.exec('ALTER TABLE items ADD COLUMN default_max_count INTEGER NOT NULL DEFAULT 20');
+}
+
+function initDefaultData() {
+  const itemCount = db.prepare('SELECT COUNT(*) as cnt FROM items').get().cnt;
+  if (itemCount === 0) {
+    const insertItem = db.prepare('INSERT INTO items (name, description, default_max_count) VALUES (?, ?, ?)');
+    insertItem.run('身份证办理', '首次申领、换领、补领居民身份证', 30);
+    insertItem.run('社保业务', '社保查询、缴费、转移等业务', 25);
+    insertItem.run('居住证办理', '居住证申领、签注、变更', 20);
+    insertItem.run('民政业务', '低保、特困、临时救助等申请', 15);
+    console.log('已初始化默认事项数据');
+  }
+
+  const holidayCount = db.prepare('SELECT COUNT(*) as cnt FROM holidays').get().cnt;
+  if (holidayCount === 0) {
+    const insertHoliday = db.prepare('INSERT INTO holidays (date, name) VALUES (?, ?)');
+    const year = new Date().getFullYear();
+    insertHoliday.run(`${year}-10-01`, '国庆节');
+    insertHoliday.run(`${year}-05-01`, '劳动节');
+    insertHoliday.run(`${year}-01-01`, '元旦');
+    console.log('已初始化默认节假日数据');
+  }
+}
+
+initDefaultData();
+
 function getTodayStr() {
   const today = new Date();
   return today.toISOString().split('T')[0];
@@ -74,22 +105,24 @@ app.get('/api/items', (req, res) => {
 });
 
 app.post('/api/items', (req, res) => {
-  const { name, description } = req.body;
+  const { name, description, default_max_count } = req.body;
   if (!name) {
     return res.status(400).json({ error: '事项名称不能为空' });
   }
-  const result = db.prepare('INSERT INTO items (name, description) VALUES (?, ?)').run(name, description || '');
-  res.json({ id: result.lastInsertRowid, name, description: description || '' });
+  const maxCount = default_max_count && default_max_count > 0 ? parseInt(default_max_count) : 20;
+  const result = db.prepare('INSERT INTO items (name, description, default_max_count) VALUES (?, ?, ?)').run(name, description || '', maxCount);
+  res.json({ id: result.lastInsertRowid, name, description: description || '', default_max_count: maxCount });
 });
 
 app.put('/api/items/:id', (req, res) => {
   const { id } = req.params;
-  const { name, description } = req.body;
+  const { name, description, default_max_count } = req.body;
   if (!name) {
     return res.status(400).json({ error: '事项名称不能为空' });
   }
-  db.prepare('UPDATE items SET name = ?, description = ? WHERE id = ?').run(name, description || '', id);
-  res.json({ id: parseInt(id), name, description: description || '' });
+  const maxCount = default_max_count && default_max_count > 0 ? parseInt(default_max_count) : 20;
+  db.prepare('UPDATE items SET name = ?, description = ?, default_max_count = ? WHERE id = ?').run(name, description || '', maxCount, id);
+  res.json({ id: parseInt(id), name, description: description || '', default_max_count: maxCount });
 });
 
 app.delete('/api/items/:id', (req, res) => {
@@ -138,14 +171,15 @@ app.get('/api/slots/:itemId/:date', (req, res) => {
     return res.json({ available: false, reason: '该日期为节假日或周末，不可预约' });
   }
 
+  const item = db.prepare('SELECT * FROM items WHERE id = ?').get(itemId);
+  if (!item) {
+    return res.status(404).json({ error: '事项不存在' });
+  }
+
   let slot = db.prepare('SELECT * FROM daily_slots WHERE item_id = ? AND date = ?').get(itemId, date);
 
   if (!slot) {
-    const item = db.prepare('SELECT * FROM items WHERE id = ?').get(itemId);
-    if (!item) {
-      return res.status(404).json({ error: '事项不存在' });
-    }
-    const defaultMax = 20;
+    const defaultMax = item.default_max_count || 20;
     db.prepare('INSERT INTO daily_slots (item_id, date, max_count, current_count) VALUES (?, ?, ?, 0)').run(itemId, date, defaultMax);
     slot = db.prepare('SELECT * FROM daily_slots WHERE item_id = ? AND date = ?').get(itemId, date);
   }
@@ -154,16 +188,19 @@ app.get('/api/slots/:itemId/:date', (req, res) => {
   const appointments = db.prepare('SELECT time_slot FROM appointments WHERE item_id = ? AND appointment_date = ? AND status != ?').all(itemId, date, 'cancelled');
 
   const usedSlots = new Set(appointments.map(a => a.time_slot));
-  const availableSlots = timeSlots.map(slot => ({
-    time: slot,
-    available: !usedSlots.has(slot)
+  const availableSlots = timeSlots.map(slotTime => ({
+    time: slotTime,
+    available: !usedSlots.has(slotTime)
   }));
 
+  const availableCount = availableSlots.filter(s => s.available).length;
+
   res.json({
-    available: true,
+    available: availableCount > 0,
     date,
     max_count: slot.max_count,
     current_count: usedSlots.size,
+    available_count: availableCount,
     time_slots: availableSlots
   });
 });
@@ -172,15 +209,25 @@ function generateTimeSlots(count) {
   const slots = [];
   const startTime = 9 * 60;
   const endTime = 17 * 60;
-  const totalMinutes = endTime - startTime - 60;
-  const interval = Math.max(15, Math.floor(totalMinutes / count));
+  const lunchStart = 12 * 60;
+  const lunchEnd = 13 * 60;
+
+  const morningMinutes = lunchStart - startTime;
+  const afternoonMinutes = endTime - lunchEnd;
+  const totalWorkMinutes = morningMinutes + afternoonMinutes;
+
+  const interval = Math.max(10, Math.floor(totalWorkMinutes / count));
 
   let current = startTime;
-  while (current < endTime - 30 && slots.length < count) {
-    if (current >= 12 * 60 && current < 13 * 60) {
-      current = 13 * 60;
-      continue;
-    }
+  while (current < lunchStart && slots.length < count) {
+    const hour = Math.floor(current / 60);
+    const minute = current % 60;
+    slots.push(`${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`);
+    current += interval;
+  }
+
+  current = lunchEnd;
+  while (current < endTime && slots.length < count) {
     const hour = Math.floor(current / 60);
     const minute = current % 60;
     slots.push(`${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`);
@@ -213,13 +260,22 @@ app.post('/api/appointments', (req, res) => {
     return res.status(400).json({ error: '该日期不可预约' });
   }
 
-  const existing = db.prepare(
-    `SELECT id FROM appointments 
-     WHERE phone = ? AND item_id = ? AND appointment_date = ? AND status != 'cancelled'`
-  ).get(phone, item_id, appointment_date);
+  const item = db.prepare('SELECT * FROM items WHERE id = ?').get(item_id);
+  if (!item) {
+    return res.status(400).json({ error: '事项不存在' });
+  }
 
-  if (existing) {
-    return res.status(400).json({ error: '该手机号今日已预约过此事项，请勿重复预约' });
+  const existingActive = db.prepare(
+    `SELECT id, appointment_date FROM appointments 
+     WHERE phone = ? AND item_id = ? AND status IN ('pending', 'arrived')
+     ORDER BY appointment_date ASC
+     LIMIT 1`
+  ).get(phone, item_id);
+
+  if (existingActive) {
+    return res.status(400).json({ 
+      error: `该手机号已有未完成的${item.name}预约（${existingActive.appointment_date}），请先完成或取消后再预约` 
+    });
   }
 
   const slotCheck = db.prepare(
@@ -231,15 +287,22 @@ app.post('/api/appointments', (req, res) => {
     return res.status(400).json({ error: '该时段已被预约，请选择其他时段' });
   }
 
+  let dailySlot = db.prepare('SELECT * FROM daily_slots WHERE item_id = ? AND date = ?').get(item_id, appointment_date);
+  if (!dailySlot) {
+    const defaultMax = item.default_max_count || 20;
+    db.prepare('INSERT INTO daily_slots (item_id, date, max_count, current_count) VALUES (?, ?, ?, 0)').run(item_id, appointment_date, defaultMax);
+    dailySlot = db.prepare('SELECT * FROM daily_slots WHERE item_id = ? AND date = ?').get(item_id, appointment_date);
+  }
+
+  if (dailySlot.current_count >= dailySlot.max_count) {
+    return res.status(400).json({ error: '该日期号源已满，请选择其他日期' });
+  }
+
   const result = db.prepare(
     'INSERT INTO appointments (item_id, user_name, phone, appointment_date, time_slot, status) VALUES (?, ?, ?, ?, ?, ?)'
   ).run(item_id, user_name, phone, appointment_date, time_slot, 'pending');
 
-  db.prepare(
-    `INSERT OR REPLACE INTO daily_slots (item_id, date, max_count, current_count)
-     VALUES (?, ?, COALESCE((SELECT max_count FROM daily_slots WHERE item_id = ? AND date = ?), 20),
-             COALESCE((SELECT current_count FROM daily_slots WHERE item_id = ? AND date = ?), 0) + 1)`
-  ).run(item_id, appointment_date, item_id, appointment_date, item_id, appointment_date);
+  db.prepare('UPDATE daily_slots SET current_count = current_count + 1 WHERE item_id = ? AND date = ?').run(item_id, appointment_date);
 
   res.json({
     id: result.lastInsertRowid,
@@ -298,15 +361,26 @@ app.put('/api/appointments/:id/status', (req, res) => {
     return res.status(404).json({ error: '预约不存在' });
   }
 
+  const oldStatus = appointment.status;
+
+  if (oldStatus === status) {
+    return res.json({ success: true, status });
+  }
+
   db.prepare('UPDATE appointments SET status = ? WHERE id = ?').run(status, id);
 
-  if (status === 'cancelled' && appointment.status !== 'cancelled') {
+  if (status === 'cancelled' && oldStatus !== 'cancelled') {
     db.prepare(
       'UPDATE daily_slots SET current_count = current_count - 1 WHERE item_id = ? AND date = ?'
     ).run(appointment.item_id, appointment.appointment_date);
   }
 
-  if (appointment.status === 'cancelled' && status !== 'cancelled') {
+  if (oldStatus === 'cancelled' && status !== 'cancelled') {
+    const slot = db.prepare('SELECT * FROM daily_slots WHERE item_id = ? AND date = ?').get(appointment.item_id, appointment.appointment_date);
+    if (slot && slot.current_count >= slot.max_count) {
+      db.prepare('UPDATE appointments SET status = ? WHERE id = ?').run(oldStatus, id);
+      return res.status(400).json({ error: '号源已满，无法恢复预约' });
+    }
     db.prepare(
       'UPDATE daily_slots SET current_count = current_count + 1 WHERE item_id = ? AND date = ?'
     ).run(appointment.item_id, appointment.appointment_date);
@@ -321,6 +395,11 @@ app.put('/api/slots/:itemId/:date/max', (req, res) => {
 
   if (!max_count || max_count < 1) {
     return res.status(400).json({ error: '号源数量必须大于0' });
+  }
+
+  const item = db.prepare('SELECT * FROM items WHERE id = ?').get(itemId);
+  if (!item) {
+    return res.status(404).json({ error: '事项不存在' });
   }
 
   const existing = db.prepare('SELECT * FROM daily_slots WHERE item_id = ? AND date = ?').get(itemId, date);
