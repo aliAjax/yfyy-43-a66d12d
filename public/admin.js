@@ -308,6 +308,7 @@ function renderItems() {
             <td>${item.created_at ? item.created_at.substring(0, 10) : '-'}</td>
             <td>
                 <div class="action-buttons">
+                    <button class="btn btn-link" onclick="openSlotModal(${item.id}, '${item.name}')">号源设置</button>
                     <button class="btn btn-link" onclick="editItem(${item.id})">编辑</button>
                     <button class="btn btn-link danger" onclick="deleteItem(${item.id})">删除</button>
                 </div>
@@ -487,6 +488,77 @@ function deleteHoliday(id) {
     });
 }
 
+function openSlotModal(itemId, itemName) {
+    const today = formatDate(new Date());
+    state.slotModalData = { itemId, itemName, date: today };
+
+    document.getElementById('slotInfo').innerHTML = `
+        <p><strong>事项：</strong>${itemName}</p>
+        <p><strong>日期：</strong><input type="date" id="slotDate" value="${today}" style="width:auto;padding:4px 8px;border:1px solid #d9d9d9;border-radius:4px;font-size:13px;"></p>
+        <p><strong>当前号源：</strong><span id="slotCurrentCount">-</span> / <span id="slotCurrentMax">-</span></p>
+    `;
+
+    document.getElementById('slotMaxCount').value = '';
+    document.getElementById('slotModal').classList.add('show');
+
+    loadSlotInfo(itemId, today);
+
+    document.getElementById('slotDate').addEventListener('change', (e) => {
+        state.slotModalData.date = e.target.value;
+        loadSlotInfo(itemId, e.target.value);
+    });
+}
+
+async function loadSlotInfo(itemId, date) {
+    try {
+        const res = await fetch(`${API_BASE}/slots/${itemId}/${date}`);
+        const data = await res.json();
+
+        if (data.available !== undefined) {
+            document.getElementById('slotCurrentCount').textContent = data.current_count || 0;
+            document.getElementById('slotCurrentMax').textContent = data.max_count || 0;
+            document.getElementById('slotMaxCount').value = data.max_count || 20;
+        } else {
+            document.getElementById('slotCurrentCount').textContent = '-';
+            document.getElementById('slotCurrentMax').textContent = '不可预约';
+        }
+    } catch (e) {
+        console.error('加载号源信息失败', e);
+    }
+}
+
+async function saveSlot() {
+    const { itemId, date } = state.slotModalData;
+    const maxCount = document.getElementById('slotMaxCount').value;
+
+    if (!maxCount || maxCount < 1) {
+        showToast('请输入有效的号源数量', 'error');
+        return;
+    }
+
+    try {
+        const res = await fetch(`${API_BASE}/slots/${itemId}/${date}/max`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ max_count: parseInt(maxCount) })
+        });
+
+        const data = await res.json();
+        if (!res.ok) {
+            throw new Error(data.error || '保存失败');
+        }
+
+        showToast('保存成功', 'success');
+        document.getElementById('slotModal').classList.remove('show');
+        
+        if (state.currentTab === 'items') {
+            loadItems();
+        }
+    } catch (e) {
+        showToast(e.message, 'error');
+    }
+}
+
 function initModals() {
     document.getElementById('btnAddItem').addEventListener('click', openAddItemModal);
     document.getElementById('btnCancelItem').addEventListener('click', () => {
@@ -554,5 +626,6 @@ window.markPending = markPending;
 window.editItem = editItem;
 window.deleteItem = deleteItem;
 window.deleteHoliday = deleteHoliday;
+window.openSlotModal = openSlotModal;
 
 document.addEventListener('DOMContentLoaded', init);
