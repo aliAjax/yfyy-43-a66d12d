@@ -86,7 +86,8 @@ function getSendStatusText(status) {
     const map = {
         sent: '已发送',
         failed: '发送失败',
-        pending: '待发送'
+        pending: '待发送',
+        simulated: '模拟发送'
     };
     return map[status] || status;
 }
@@ -95,7 +96,8 @@ function getSendStatusClass(status) {
     const map = {
         sent: 'status-completed',
         failed: 'status-cancelled',
-        pending: 'status-pending'
+        pending: 'status-pending',
+        simulated: 'status-arrived'
     };
     return map[status] || '';
 }

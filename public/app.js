@@ -502,7 +502,7 @@ async function submitQuery() {
 
         renderAppointmentDetail(data, materials);
 
-        loadLatestReminderForDetail(data.phone);
+        loadLatestReminderForDetail(data.id, data.phone);
 
         document.getElementById('queryForm').style.display = 'none';
         document.getElementById('queryResult').style.display = 'block';
@@ -590,9 +590,9 @@ function renderAppointmentDetail(appointment, materials = []) {
     }
 }
 
-async function loadLatestReminderForDetail(phone) {
+async function loadLatestReminderForDetail(appointmentId, phone) {
     try {
-        const res = await fetch(`${API_BASE}/reminders/latest?phone=${encodeURIComponent(phone)}`);
+        const res = await fetch(`${API_BASE}/reminders/latest?appointment_id=${encodeURIComponent(appointmentId)}`);
         if (res.ok) {
             const data = await res.json();
             const box = document.getElementById('detailReminder');
@@ -652,7 +652,7 @@ async function confirmCancelAppointment() {
 
         state.currentAppointment.status = 'cancelled';
         renderAppointmentDetail(state.currentAppointment);
-        loadLatestReminderForDetail(state.currentAppointment.phone);
+        loadLatestReminderForDetail(state.currentAppointment.id, state.currentAppointment.phone);
     } catch (e) {
         showToast(e.message, 'error');
     } finally {

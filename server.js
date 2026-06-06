@@ -112,7 +112,7 @@ function createReminder(appointmentId, phone, type, content) {
   const stmt = db.prepare(
     'INSERT INTO appointment_reminders (appointment_id, phone, type, content, send_status) VALUES (?, ?, ?, ?, ?)'
   );
-  const result = stmt.run(appointmentId, phone, type, content, 'sent');
+  const result = stmt.run(appointmentId, phone, type, content, 'simulated');
   return result.lastInsertRowid;
 }
 
@@ -728,7 +728,7 @@ app.get('/api/reminders', (req, res) => {
     countParams.push(send_status);
   }
 
-  sql += ' ORDER BY r.created_at DESC LIMIT ? OFFSET ?';
+  sql += ' ORDER BY r.created_at DESC, r.id DESC LIMIT ? OFFSET ?';
   const limit = parseInt(page_size) || 20;
   const offset = (parseInt(page) - 1) * limit;
   params.push(limit, offset);
@@ -746,21 +746,33 @@ app.get('/api/reminders', (req, res) => {
 });
 
 app.get('/api/reminders/latest', (req, res) => {
-  const { phone } = req.query;
+  const { phone, appointment_id } = req.query;
 
-  if (!phone) {
-    return res.status(400).json({ error: '请提供手机号' });
+  if (!phone && !appointment_id) {
+    return res.status(400).json({ error: '请提供手机号或预约编号' });
   }
 
-  const reminder = db.prepare(`
+  let sql = `
     SELECT r.*, a.user_name, i.name as item_name, a.appointment_date, a.time_slot
     FROM appointment_reminders r
     LEFT JOIN appointments a ON r.appointment_id = a.id
     LEFT JOIN items i ON a.item_id = i.id
-    WHERE r.phone = ?
-    ORDER BY r.created_at DESC
-    LIMIT 1
-  `).get(phone);
+    WHERE 1=1
+  `;
+  const params = [];
+
+  if (phone) {
+    sql += ' AND r.phone = ?';
+    params.push(phone);
+  }
+  if (appointment_id) {
+    sql += ' AND r.appointment_id = ?';
+    params.push(appointment_id);
+  }
+
+  sql += ' ORDER BY r.created_at DESC, r.id DESC LIMIT 1';
+
+  const reminder = db.prepare(sql).get(...params);
 
   if (!reminder) {
     return res.status(404).json({ error: '暂无提醒记录' });
@@ -778,7 +790,7 @@ app.get('/api/appointments/:id/reminders', (req, res) => {
     LEFT JOIN appointments a ON r.appointment_id = a.id
     LEFT JOIN items i ON a.item_id = i.id
     WHERE r.appointment_id = ?
-    ORDER BY r.created_at DESC
+    ORDER BY r.created_at DESC, r.id DESC
   `).all(id);
 
   res.json(reminders);
