@@ -111,6 +111,16 @@ if (!hasDefaultMaxCount) {
   db.exec('ALTER TABLE items ADD COLUMN default_max_count INTEGER NOT NULL DEFAULT 20');
 }
 
+const aptColumns = db.prepare("PRAGMA table_info(appointments)").all();
+const hasQueueNumber = aptColumns.some(c => c.name === 'queue_number');
+if (!hasQueueNumber) {
+  db.exec('ALTER TABLE appointments ADD COLUMN queue_number INTEGER');
+}
+const hasCalledAt = aptColumns.some(c => c.name === 'called_at');
+if (!hasCalledAt) {
+  db.exec('ALTER TABLE appointments ADD COLUMN called_at DATETIME');
+}
+
 db.prepare("UPDATE appointment_reminders SET send_status = 'simulated' WHERE send_status = 'sent'").run();
 
 function initDefaultData() {
@@ -149,7 +159,8 @@ function generateReminderContent(type, appointment) {
   const templates = {
     created: `【预约成功】您的${appointment.item_name || '业务'}预约已成功，预约日期：${appointment.appointment_date} ${appointment.time_slot}，请准时前往办理。`,
     cancelled: `【预约取消】您的${appointment.item_name || '业务'}预约已取消，预约日期：${appointment.appointment_date} ${appointment.time_slot}。`,
-    arrived: `【到场提醒】您的${appointment.item_name || '业务'}预约已签到，请前往对应窗口办理业务。`,
+    arrived: `【到场提醒】您的${appointment.item_name || '业务'}预约已签到，请在休息区等待叫号。`,
+    calling: `【叫号提醒】请${appointment.user_name || ''}顾客前往${appointment.item_name || '业务'}窗口办理，您的号码是${appointment.queue_number || ''}号。`,
     completed: `【办理完成】您的${appointment.item_name || '业务'}已办理完成，感谢您的配合。`
   };
   return templates[type] || '';
@@ -589,9 +600,14 @@ app.post('/api/appointments', (req, res) => {
     return res.status(400).json({ error: '该日期号源已满，请选择其他日期' });
   }
 
+  const todayCount = db.prepare(
+    'SELECT COUNT(*) as cnt FROM appointments WHERE item_id = ? AND appointment_date = ?'
+  ).get(item_id, appointment_date).cnt;
+  const queueNumber = todayCount + 1;
+
   const result = db.prepare(
-    'INSERT INTO appointments (item_id, user_name, phone, appointment_date, time_slot, status) VALUES (?, ?, ?, ?, ?, ?)'
-  ).run(item_id, user_name, phone, appointment_date, time_slot, 'pending');
+    'INSERT INTO appointments (item_id, user_name, phone, appointment_date, time_slot, status, queue_number) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  ).run(item_id, user_name, phone, appointment_date, time_slot, 'pending', queueNumber);
 
   db.prepare('UPDATE daily_slots SET current_count = current_count + 1 WHERE item_id = ? AND date = ?').run(item_id, appointment_date);
 
@@ -721,7 +737,7 @@ app.put('/api/appointments/:id/status', (req, res) => {
   const { id } = req.params;
   const { status } = req.body;
 
-  const validStatuses = ['pending', 'arrived', 'completed', 'cancelled'];
+  const validStatuses = ['pending', 'arrived', 'calling', 'completed', 'cancelled'];
   if (!validStatuses.includes(status)) {
     return res.status(400).json({ error: '无效的状态' });
   }
@@ -737,7 +753,14 @@ app.put('/api/appointments/:id/status', (req, res) => {
     return res.json({ success: true, status });
   }
 
-  db.prepare('UPDATE appointments SET status = ? WHERE id = ?').run(status, id);
+  if (status === 'calling') {
+    if (oldStatus !== 'arrived') {
+      return res.status(400).json({ error: '只有已到场的预约才能叫号' });
+    }
+    db.prepare('UPDATE appointments SET status = ?, called_at = CURRENT_TIMESTAMP WHERE id = ?').run(status, id);
+  } else {
+    db.prepare('UPDATE appointments SET status = ? WHERE id = ?').run(status, id);
+  }
 
   if (status === 'cancelled' && oldStatus !== 'cancelled') {
     db.prepare(
@@ -756,13 +779,15 @@ app.put('/api/appointments/:id/status', (req, res) => {
     ).run(appointment.item_id, appointment.appointment_date);
   }
 
-  const reminderTypes = ['arrived', 'completed', 'cancelled'];
+  const reminderTypes = ['arrived', 'calling', 'completed', 'cancelled'];
   if (reminderTypes.includes(status) && oldStatus !== status) {
     const item = db.prepare('SELECT name FROM items WHERE id = ?').get(appointment.item_id);
     const reminderContent = generateReminderContent(status, {
       item_name: item ? item.name : '',
       appointment_date: appointment.appointment_date,
-      time_slot: appointment.time_slot
+      time_slot: appointment.time_slot,
+      user_name: appointment.user_name,
+      queue_number: appointment.queue_number
     });
     createReminder(appointment.id, appointment.phone, status, reminderContent);
   }
@@ -900,6 +925,214 @@ app.get('/api/appointments/:id/reminders', (req, res) => {
   `).all(id);
 
   res.json(reminders);
+});
+
+app.get('/api/board/today', (req, res) => {
+  const today = getTodayStr();
+
+  const items = db.prepare('SELECT * FROM items ORDER BY id').all();
+
+  const appointments = db.prepare(`
+    SELECT a.*, i.name as item_name
+    FROM appointments a
+    LEFT JOIN items i ON a.item_id = i.id
+    WHERE a.appointment_date = ?
+    ORDER BY a.item_id ASC, a.queue_number ASC
+  `).all(today);
+
+  const result = items.map(item => {
+    const itemApts = appointments.filter(a => a.item_id === item.id);
+    const calling = itemApts.filter(a => a.status === 'calling');
+    const waiting = itemApts.filter(a => a.status === 'arrived');
+    const completed = itemApts.filter(a => a.status === 'completed');
+    const pending = itemApts.filter(a => a.status === 'pending');
+
+    return {
+      item_id: item.id,
+      item_name: item.name,
+      calling: calling,
+      waiting: waiting,
+      completed: completed,
+      pending: pending,
+      total: itemApts.length,
+      waiting_count: waiting.length,
+      completed_count: completed.length
+    };
+  });
+
+  const totalWaiting = appointments.filter(a => a.status === 'arrived').length;
+  const totalCalling = appointments.filter(a => a.status === 'calling').length;
+  const totalCompleted = appointments.filter(a => a.status === 'completed').length;
+
+  res.json({
+    date: today,
+    items: result,
+    summary: {
+      total: appointments.length,
+      waiting: totalWaiting,
+      calling: totalCalling,
+      completed: totalCompleted
+    }
+  });
+});
+
+app.post('/api/appointments/:id/call', (req, res) => {
+  const { id } = req.params;
+
+  const appointment = db.prepare('SELECT * FROM appointments WHERE id = ?').get(id);
+  if (!appointment) {
+    return res.status(404).json({ error: '预约不存在' });
+  }
+
+  if (appointment.status !== 'arrived') {
+    return res.status(400).json({ error: '只有已到场的预约才能叫号' });
+  }
+
+  const item = db.prepare('SELECT name FROM items WHERE id = ?').get(appointment.item_id);
+
+  const tx = db.transaction(() => {
+    const currentCalling = db.prepare(
+      'SELECT id FROM appointments WHERE item_id = ? AND appointment_date = ? AND status = ?'
+    ).get(appointment.item_id, appointment.appointment_date, 'calling');
+
+    if (currentCalling) {
+      return res.status(400).json({ error: '该事项已有正在叫号的预约，请先完成或取消' });
+    }
+
+    db.prepare('UPDATE appointments SET status = ?, called_at = CURRENT_TIMESTAMP WHERE id = ?').run('calling', id);
+
+    const reminderContent = generateReminderContent('calling', {
+      item_name: item ? item.name : '',
+      appointment_date: appointment.appointment_date,
+      time_slot: appointment.time_slot,
+      user_name: appointment.user_name,
+      queue_number: appointment.queue_number
+    });
+    createReminder(appointment.id, appointment.phone, 'calling', reminderContent);
+  });
+
+  try {
+    tx();
+    res.json({ success: true, message: '叫号成功' });
+  } catch (e) {
+    if (!res.headersSent) {
+      res.status(500).json({ error: '叫号失败' });
+    }
+  }
+});
+
+app.post('/api/appointments/:id/next', (req, res) => {
+  const { id } = req.params;
+  const { skip_current } = req.body;
+
+  const currentApt = db.prepare('SELECT * FROM appointments WHERE id = ?').get(id);
+  if (!currentApt) {
+    return res.status(404).json({ error: '预约不存在' });
+  }
+
+  if (currentApt.status !== 'calling') {
+    return res.status(400).json({ error: '该预约不在叫号状态' });
+  }
+
+  const tx = db.transaction(() => {
+    if (skip_current) {
+      db.prepare('UPDATE appointments SET status = ? WHERE id = ?').run('arrived', id);
+    } else {
+      db.prepare('UPDATE appointments SET status = ? WHERE id = ?').run('completed', id);
+      const item = db.prepare('SELECT name FROM items WHERE id = ?').get(currentApt.item_id);
+      const reminderContent = generateReminderContent('completed', {
+        item_name: item ? item.name : '',
+        appointment_date: currentApt.appointment_date,
+        time_slot: currentApt.time_slot,
+        user_name: currentApt.user_name,
+        queue_number: currentApt.queue_number
+      });
+      createReminder(currentApt.id, currentApt.phone, 'completed', reminderContent);
+    }
+
+    const nextApt = db.prepare(`
+      SELECT * FROM appointments
+      WHERE item_id = ? AND appointment_date = ? AND status = ?
+      ORDER BY queue_number ASC
+      LIMIT 1
+    `).get(currentApt.item_id, currentApt.appointment_date, 'arrived');
+
+    if (nextApt) {
+      const item = db.prepare('SELECT name FROM items WHERE id = ?').get(nextApt.item_id);
+      db.prepare('UPDATE appointments SET status = ?, called_at = CURRENT_TIMESTAMP WHERE id = ?').run('calling', nextApt.id);
+      const reminderContent = generateReminderContent('calling', {
+        item_name: item ? item.name : '',
+        appointment_date: nextApt.appointment_date,
+        time_slot: nextApt.time_slot,
+        user_name: nextApt.user_name,
+        queue_number: nextApt.queue_number
+      });
+      createReminder(nextApt.id, nextApt.phone, 'calling', reminderContent);
+      return { has_next: true, next: nextApt };
+    }
+
+    return { has_next: false, next: null };
+  });
+
+  try {
+    const result = tx();
+    res.json({
+      success: true,
+      has_next: result.has_next,
+      next_appointment: result.next,
+      message: result.has_next ? '已叫下一号' : '当前已是最后一位'
+    });
+  } catch (e) {
+    res.status(500).json({ error: '操作失败' });
+  }
+});
+
+app.post('/api/items/:itemId/call-next', (req, res) => {
+  const { itemId } = req.params;
+  const today = getTodayStr();
+
+  const item = db.prepare('SELECT * FROM items WHERE id = ?').get(itemId);
+  if (!item) {
+    return res.status(404).json({ error: '事项不存在' });
+  }
+
+  const currentCalling = db.prepare(
+    'SELECT id FROM appointments WHERE item_id = ? AND appointment_date = ? AND status = ?'
+  ).get(itemId, today, 'calling');
+
+  if (currentCalling) {
+    return res.status(400).json({ error: '该事项已有正在叫号的预约' });
+  }
+
+  const nextApt = db.prepare(`
+    SELECT * FROM appointments
+    WHERE item_id = ? AND appointment_date = ? AND status = ?
+    ORDER BY queue_number ASC
+    LIMIT 1
+  `).get(itemId, today, 'arrived');
+
+  if (!nextApt) {
+    return res.json({ success: true, has_next: false, message: '暂无等待叫号的预约' });
+  }
+
+  const tx = db.transaction(() => {
+    db.prepare('UPDATE appointments SET status = ?, called_at = CURRENT_TIMESTAMP WHERE id = ?').run('calling', nextApt.id);
+    const reminderContent = generateReminderContent('calling', {
+      item_name: item.name,
+      appointment_date: nextApt.appointment_date,
+      time_slot: nextApt.time_slot,
+      user_name: nextApt.user_name,
+      queue_number: nextApt.queue_number
+    });
+    createReminder(nextApt.id, nextApt.phone, 'calling', reminderContent);
+  });
+
+  try {
+    tx();
+    res.json({ success: true, has_next: true, appointment: nextApt, message: '叫号成功' });
+  } catch (e) {
+    res.status(500).json({ error: '叫号失败' });
+  }
 });
 
 app.get('/api/stats', (req, res) => {
@@ -1238,6 +1471,10 @@ app.get('/', (req, res) => {
 
 app.get('/admin', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'admin.html'));
+});
+
+app.get('/board', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'board.html'));
 });
 
 app.listen(PORT, () => {

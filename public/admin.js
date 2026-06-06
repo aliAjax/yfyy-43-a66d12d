@@ -61,6 +61,7 @@ function getStatusText(status) {
     const map = {
         pending: '待办理',
         arrived: '已到场',
+        calling: '叫号中',
         completed: '已办理',
         cancelled: '已取消'
     };
@@ -185,7 +186,7 @@ async function loadTodayAppointments() {
         const appointments = await res.json();
         renderTodayAppointments(appointments);
     } catch (e) {
-        document.getElementById('todayAppointments').innerHTML = '<tr><td colspan="6" class="loading">加载失败</td></tr>';
+        document.getElementById('todayAppointments').innerHTML = '<tr><td colspan="7" class="loading">加载失败</td></tr>';
     }
 }
 
@@ -195,7 +196,7 @@ function renderTodayAppointments(appointments) {
     if (appointments.length === 0) {
         tbody.innerHTML = `
             <tr>
-                <td colspan="6" class="empty-state">
+                <td colspan="7" class="empty-state">
                     <div class="empty-icon">📅</div>
                     <p>今日暂无预约</p>
                 </td>
@@ -206,6 +207,7 @@ function renderTodayAppointments(appointments) {
 
     tbody.innerHTML = appointments.map(apt => `
         <tr>
+            <td>${apt.queue_number || '-'}</td>
             <td>${apt.time_slot}</td>
             <td>${apt.item_name}</td>
             <td>${apt.user_name}</td>
@@ -214,8 +216,10 @@ function renderTodayAppointments(appointments) {
             <td>
                 <div class="action-buttons">
                     ${apt.status === 'pending' ? `<button class="btn btn-sm btn-primary" onclick="markArrived(${apt.id})">已到场</button>` : ''}
-                    ${apt.status === 'arrived' ? `<button class="btn btn-sm btn-primary" onclick="markCompleted(${apt.id})">已办理</button>` : ''}
-                    ${apt.status !== 'cancelled' && apt.status !== 'completed' ? `<button class="btn btn-sm btn-secondary" onclick="markCancelled(${apt.id})">取消</button>` : ''}
+                    ${apt.status === 'arrived' ? `<button class="btn btn-sm btn-primary" onclick="callNumber(${apt.id})">叫号</button>` : ''}
+                    ${apt.status === 'calling' ? `<button class="btn btn-sm btn-success" onclick="markCompleted(${apt.id})">完成</button>` : ''}
+                    ${apt.status === 'calling' ? `<button class="btn btn-sm btn-secondary" onclick="nextNumber(${apt.id})">下一号</button>` : ''}
+                    ${apt.status !== 'cancelled' && apt.status !== 'completed' && apt.status !== 'calling' ? `<button class="btn btn-sm btn-secondary" onclick="markCancelled(${apt.id})">取消</button>` : ''}
                 </div>
             </td>
         </tr>
@@ -259,7 +263,7 @@ async function searchAppointments() {
         state.appointments = await res.json();
         renderAppointments(state.appointments);
     } catch (e) {
-        document.getElementById('appointmentList').innerHTML = '<tr><td colspan="8" class="loading">加载失败</td></tr>';
+        document.getElementById('appointmentList').innerHTML = '<tr><td colspan="9" class="loading">加载失败</td></tr>';
     }
 }
 
@@ -269,7 +273,7 @@ function renderAppointments(appointments) {
     if (appointments.length === 0) {
         tbody.innerHTML = `
             <tr>
-                <td colspan="8" class="empty-state">
+                <td colspan="9" class="empty-state">
                     <div class="empty-icon">🔍</div>
                     <p>暂无符合条件的预约记录</p>
                 </td>
@@ -280,6 +284,7 @@ function renderAppointments(appointments) {
 
     tbody.innerHTML = appointments.map(apt => `
         <tr>
+            <td>${apt.id}</td>
             <td>${apt.appointment_date}</td>
             <td>${apt.time_slot}</td>
             <td>${apt.item_name}</td>
@@ -290,7 +295,9 @@ function renderAppointments(appointments) {
             <td>
                 <div class="action-buttons">
                     ${apt.status === 'pending' ? `<button class="btn btn-sm btn-primary" onclick="markArrived(${apt.id})">已到场</button>` : ''}
-                    ${apt.status === 'arrived' ? `<button class="btn btn-sm btn-primary" onclick="markCompleted(${apt.id})">已办理</button>` : ''}
+                    ${apt.status === 'arrived' ? `<button class="btn btn-sm btn-primary" onclick="callNumber(${apt.id})">叫号</button>` : ''}
+                    ${apt.status === 'calling' ? `<button class="btn btn-sm btn-success" onclick="markCompleted(${apt.id})">完成</button>` : ''}
+                    ${apt.status === 'calling' ? `<button class="btn btn-sm btn-secondary" onclick="nextNumber(${apt.id})">下一号</button>` : ''}
                     ${apt.status === 'pending' || apt.status === 'arrived' ? `<button class="btn btn-sm btn-secondary" onclick="markCancelled(${apt.id})">取消</button>` : ''}
                     ${apt.status === 'cancelled' ? `<button class="btn btn-sm btn-secondary" onclick="markPending(${apt.id})">恢复</button>` : ''}
                 </div>
@@ -346,6 +353,55 @@ function markPending(id) {
     showConfirm('确认恢复', '确定恢复此预约？', () => {
         updateStatus(id, 'pending');
     });
+}
+
+async function callNumber(id) {
+    try {
+        const res = await fetch(`${API_BASE}/appointments/${id}/call`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
+
+        const data = await res.json();
+        if (!res.ok) {
+            throw new Error(data.error || '叫号失败');
+        }
+
+        showToast('叫号成功', 'success');
+        refreshCurrentView();
+    } catch (e) {
+        showToast(e.message, 'error');
+    }
+}
+
+async function nextNumber(id) {
+    showConfirm('下一号', '确定完成当前叫号并叫下一位？', async () => {
+        try {
+            const res = await fetch(`${API_BASE}/appointments/${id}/next`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ skip_current: false })
+            });
+
+            const data = await res.json();
+            if (!res.ok) {
+                throw new Error(data.error || '操作失败');
+            }
+
+            showToast(data.message, 'success');
+            refreshCurrentView();
+        } catch (e) {
+            showToast(e.message, 'error');
+        }
+    });
+}
+
+function refreshCurrentView() {
+    if (state.currentTab === 'dashboard') {
+        loadDashboard();
+    } else if (state.currentTab === 'appointments') {
+        searchAppointments();
+    }
 }
 
 async function loadItems() {
@@ -1400,6 +1456,8 @@ window.markArrived = markArrived;
 window.markCompleted = markCompleted;
 window.markCancelled = markCancelled;
 window.markPending = markPending;
+window.callNumber = callNumber;
+window.nextNumber = nextNumber;
 window.editItem = editItem;
 window.deleteItem = deleteItem;
 window.deleteHoliday = deleteHoliday;

@@ -42,6 +42,11 @@
                     <span class="nav-icon">🚫</span>
                     <span>手机号限制</span>
                 </div>
+                <div class="nav-item nav-item-board" onclick="window.open('/board', '_blank')" style="cursor:pointer;">
+                    <span class="nav-icon">📺</span>
+                    <span>叫号看板</span>
+                    <span class="nav-ext">↗</span>
+                </div>
             </nav>
             <div class="sidebar-footer">
                 <a href="/" class="link-btn">← 返回首页</a>
@@ -109,6 +114,7 @@
                             <table class="data-table">
                                 <thead>
                                     <tr>
+                                        <th>排号</th>
                                         <th>时段</th>
                                         <th>事项</th>
                                         <th>姓名</th>
@@ -118,7 +124,7 @@
                                     </tr>
                                 </thead>
                                 <tbody id="todayAppointments">
-                                    <tr><td colspan="6" class="loading">加载中...</td></tr>
+                                    <tr><td colspan="7" class="loading">加载中...</td></tr>
                                 </tbody>
                             </table>
                         </div>
@@ -143,6 +149,7 @@
                                 <option value="">全部状态</option>
                                 <option value="pending">待办理</option>
                                 <option value="arrived">已到场</option>
+                                <option value="calling">叫号中</option>
                                 <option value="completed">已办理</option>
                                 <option value="cancelled">已取消</option>
                             </select>
@@ -161,6 +168,7 @@
                         <table class="data-table">
                             <thead>
                                 <tr>
+                                    <th>ID</th>
                                     <th>预约日期</th>
                                     <th>时段</th>
                                     <th>事项</th>
@@ -172,7 +180,7 @@
                                 </tr>
                             </thead>
                             <tbody id="appointmentList">
-                                <tr><td colspan="8" class="loading">加载中...</td></tr>
+                                <tr><td colspan="9" class="loading">加载中...</td></tr>
                             </tbody>
                         </table>
                     </div>

@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>大厅叫号看板 - 街道办预约系统</title>
+    <link rel="stylesheet" href="board.css">
+</head>
+<body>
+    <div class="board-container">
+        <header class="board-header">
+            <div class="header-left">
+                <h1 class="board-title">办事大厅叫号系统</h1>
+                <p class="board-subtitle">街道办事处便民服务中心</p>
+            </div>
+            <div class="header-right">
+                <div class="datetime-display">
+                    <div class="date-text" id="currentDate"></div>
+                    <div class="time-text" id="currentTime"></div>
+                </div>
+            </div>
+        </header>
+
+        <div class="board-stats">
+            <div class="stat-box stat-total">
+                <div class="stat-label">今日总预约</div>
+                <div class="stat-value" id="statTotal">0</div>
+            </div>
+            <div class="stat-box stat-calling">
+                <div class="stat-label">正在办理</div>
+                <div class="stat-value" id="statCalling">0</div>
+            </div>
+            <div class="stat-box stat-waiting">
+                <div class="stat-label">等待办理</div>
+                <div class="stat-value" id="statWaiting">0</div>
+            </div>
+            <div class="stat-box stat-completed">
+                <div class="stat-label">已完成</div>
+                <div class="stat-value" id="statCompleted">0</div>
+            </div>
+        </div>
+
+        <div class="board-content" id="boardContent">
+            <div class="loading-state">
+                <div class="loading-icon">📺</div>
+                <p>加载中...</p>
+            </div>
+        </div>
+
+        <footer class="board-footer">
+            <div class="footer-info">
+                <span class="refresh-hint">数据每 <span id="refreshInterval">30</span> 秒自动刷新</span>
+                <span class="last-update">最后更新: <span id="lastUpdate">--:--:--</span></span>
+            </div>
+            <div class="footer-actions">
+                <button class="btn-refresh" onclick="refreshBoard()" title="手动刷新">🔄 刷新</button>
+            </div>
+        </footer>
+    </div>
+
+    <div id="callingOverlay" class="calling-overlay hidden">
+        <div class="calling-content">
+            <div class="calling-animation">
+                <div class="calling-number" id="overlayNumber">001</div>
+                <div class="calling-item" id="overlayItem">事项名称</div>
+                <div class="calling-name" id="overlayName">请XXX到窗口办理</div>
+            </div>
+        </div>
+    </div>
+
+    <script src="board.js"></script>
+</body>
+</html>
