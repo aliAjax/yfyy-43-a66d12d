@@ -59,9 +59,23 @@ db.exec(`
     FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE
   );
 
+  CREATE TABLE IF NOT EXISTS appointment_reminders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    appointment_id INTEGER NOT NULL,
+    phone TEXT NOT NULL,
+    type TEXT NOT NULL,
+    content TEXT NOT NULL,
+    send_status TEXT NOT NULL DEFAULT 'sent',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (appointment_id) REFERENCES appointments(id)
+  );
+
   CREATE INDEX IF NOT EXISTS idx_materials_item ON item_materials(item_id);
   CREATE INDEX IF NOT EXISTS idx_appointments_phone_item ON appointments(phone, item_id);
   CREATE INDEX IF NOT EXISTS idx_appointments_date ON appointments(appointment_date);
+  CREATE INDEX IF NOT EXISTS idx_reminders_phone ON appointment_reminders(phone);
+  CREATE INDEX IF NOT EXISTS idx_reminders_appointment ON appointment_reminders(appointment_id);
+  CREATE INDEX IF NOT EXISTS idx_reminders_created ON appointment_reminders(created_at);
 `);
 
 const columns = db.prepare("PRAGMA table_info(items)").all();
@@ -93,6 +107,24 @@ function initDefaultData() {
 }
 
 initDefaultData();
+
+function createReminder(appointmentId, phone, type, content) {
+  const stmt = db.prepare(
+    'INSERT INTO appointment_reminders (appointment_id, phone, type, content, send_status) VALUES (?, ?, ?, ?, ?)'
+  );
+  const result = stmt.run(appointmentId, phone, type, content, 'sent');
+  return result.lastInsertRowid;
+}
+
+function generateReminderContent(type, appointment) {
+  const templates = {
+    created: `【预约成功】您的${appointment.item_name || '业务'}预约已成功，预约日期：${appointment.appointment_date} ${appointment.time_slot}，请准时前往办理。`,
+    cancelled: `【预约取消】您的${appointment.item_name || '业务'}预约已取消，预约日期：${appointment.appointment_date} ${appointment.time_slot}。`,
+    arrived: `【到场提醒】您的${appointment.item_name || '业务'}预约已签到，请前往对应窗口办理业务。`,
+    completed: `【办理完成】您的${appointment.item_name || '业务'}已办理完成，感谢您的配合。`
+  };
+  return templates[type] || '';
+}
 
 function getTodayStr() {
   const today = new Date();
@@ -457,8 +489,17 @@ app.post('/api/appointments', (req, res) => {
 
   db.prepare('UPDATE daily_slots SET current_count = current_count + 1 WHERE item_id = ? AND date = ?').run(item_id, appointment_date);
 
+  const appointmentId = result.lastInsertRowid;
+  const itemName = item.name;
+  const reminderContent = generateReminderContent('created', {
+    item_name: itemName,
+    appointment_date,
+    time_slot
+  });
+  createReminder(appointmentId, phone, 'created', reminderContent);
+
   res.json({
-    id: result.lastInsertRowid,
+    id: appointmentId,
     item_id,
     user_name,
     phone,
@@ -559,6 +600,14 @@ app.post('/api/appointments/:id/cancel', (req, res) => {
     'UPDATE daily_slots SET current_count = current_count - 1 WHERE item_id = ? AND date = ?'
   ).run(appointment.item_id, appointment.appointment_date);
 
+  const item = db.prepare('SELECT name FROM items WHERE id = ?').get(appointment.item_id);
+  const reminderContent = generateReminderContent('cancelled', {
+    item_name: item ? item.name : '',
+    appointment_date: appointment.appointment_date,
+    time_slot: appointment.time_slot
+  });
+  createReminder(id, appointment.phone, 'cancelled', reminderContent);
+
   res.json({ success: true, message: '预约已取消，号源已释放' });
 });
 
@@ -601,6 +650,17 @@ app.put('/api/appointments/:id/status', (req, res) => {
     ).run(appointment.item_id, appointment.appointment_date);
   }
 
+  const reminderTypes = ['arrived', 'completed', 'cancelled'];
+  if (reminderTypes.includes(status) && oldStatus !== status) {
+    const item = db.prepare('SELECT name FROM items WHERE id = ?').get(appointment.item_id);
+    const reminderContent = generateReminderContent(status, {
+      item_name: item ? item.name : '',
+      appointment_date: appointment.appointment_date,
+      time_slot: appointment.time_slot
+    });
+    createReminder(appointment.id, appointment.phone, status, reminderContent);
+  }
+
   res.json({ success: true, status });
 });
 
@@ -629,6 +689,99 @@ app.put('/api/slots/:itemId/:date/max', (req, res) => {
   }
 
   res.json({ success: true, max_count: parseInt(max_count) });
+});
+
+app.get('/api/reminders', (req, res) => {
+  const { phone, date, type, send_status, page = 1, page_size = 20 } = req.query;
+
+  let countSql = `SELECT COUNT(*) as total FROM appointment_reminders WHERE 1=1`;
+  let sql = `SELECT r.*, a.user_name, a.item_id, i.name as item_name, a.appointment_date, a.time_slot 
+             FROM appointment_reminders r 
+             LEFT JOIN appointments a ON r.appointment_id = a.id
+             LEFT JOIN items i ON a.item_id = i.id
+             WHERE 1=1`;
+  const params = [];
+  const countParams = [];
+
+  if (phone) {
+    sql += ' AND r.phone = ?';
+    countSql += ' AND phone = ?';
+    params.push(phone);
+    countParams.push(phone);
+  }
+  if (date) {
+    sql += ' AND DATE(r.created_at) = ?';
+    countSql += ' AND DATE(created_at) = ?';
+    params.push(date);
+    countParams.push(date);
+  }
+  if (type) {
+    sql += ' AND r.type = ?';
+    countSql += ' AND type = ?';
+    params.push(type);
+    countParams.push(type);
+  }
+  if (send_status) {
+    sql += ' AND r.send_status = ?';
+    countSql += ' AND send_status = ?';
+    params.push(send_status);
+    countParams.push(send_status);
+  }
+
+  sql += ' ORDER BY r.created_at DESC LIMIT ? OFFSET ?';
+  const limit = parseInt(page_size) || 20;
+  const offset = (parseInt(page) - 1) * limit;
+  params.push(limit, offset);
+
+  const reminders = db.prepare(sql).all(...params);
+  const total = db.prepare(countSql).get(...countParams).total;
+
+  res.json({
+    list: reminders,
+    total,
+    page: parseInt(page),
+    page_size: limit,
+    total_pages: Math.ceil(total / limit)
+  });
+});
+
+app.get('/api/reminders/latest', (req, res) => {
+  const { phone } = req.query;
+
+  if (!phone) {
+    return res.status(400).json({ error: '请提供手机号' });
+  }
+
+  const reminder = db.prepare(`
+    SELECT r.*, a.user_name, i.name as item_name, a.appointment_date, a.time_slot
+    FROM appointment_reminders r
+    LEFT JOIN appointments a ON r.appointment_id = a.id
+    LEFT JOIN items i ON a.item_id = i.id
+    WHERE r.phone = ?
+    ORDER BY r.created_at DESC
+    LIMIT 1
+  `).get(phone);
+
+  if (!reminder) {
+    return res.status(404).json({ error: '暂无提醒记录' });
+  }
+
+  res.json(reminder);
+});
+
+app.get('/api/appointments/:id/reminders', (req, res) => {
+  const { id } = req.params;
+
+  const reminders = db.prepare(`
+    SELECT r.*, i.name as item_name
+    FROM appointment_reminders r
+    LEFT JOIN appointments a ON r.appointment_id = a.id
+    LEFT JOIN items i ON a.item_id = i.id
+    WHERE r.appointment_id = ?
+    ORDER BY r.created_at DESC
+  `).all(id);
+
+  res.json(reminders);
 });
 
 app.get('/api/stats', (req, res) => {

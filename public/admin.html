@@ -30,6 +30,10 @@
                     <span class="nav-icon">🎉</span>
                     <span>节假日管理</span>
                 </div>
+                <div class="nav-item" data-tab="reminders">
+                    <span class="nav-icon">📱</span>
+                    <span>提醒记录</span>
+                </div>
             </nav>
             <div class="sidebar-footer">
                 <a href="/" class="link-btn">← 返回首页</a>
@@ -202,6 +206,68 @@
                             </tbody>
                         </table>
                     </div>
+                </div>
+
+                <div class="tab-content" id="tab-reminders">
+                    <div class="page-header">
+                        <h3>预约提醒记录</h3>
+                    </div>
+
+                    <div class="filter-bar">
+                        <div class="filter-item">
+                            <label>手机号</label>
+                            <input type="text" id="filterReminderPhone" placeholder="搜索手机号">
+                        </div>
+                        <div class="filter-item">
+                            <label>日期</label>
+                            <input type="date" id="filterReminderDate">
+                        </div>
+                        <div class="filter-item">
+                            <label>提醒类型</label>
+                            <select id="filterReminderType">
+                                <option value="">全部类型</option>
+                                <option value="created">预约创建</option>
+                                <option value="cancelled">预约取消</option>
+                                <option value="arrived">已到场</option>
+                                <option value="completed">办理完成</option>
+                            </select>
+                        </div>
+                        <div class="filter-item">
+                            <label>发送状态</label>
+                            <select id="filterReminderStatus">
+                                <option value="">全部状态</option>
+                                <option value="sent">已发送</option>
+                                <option value="failed">发送失败</option>
+                                <option value="pending">待发送</option>
+                            </select>
+                        </div>
+                        <div class="filter-item filter-actions">
+                            <button class="btn btn-primary" id="btnSearchReminder">查询</button>
+                            <button class="btn btn-secondary" id="btnResetReminder">重置</button>
+                        </div>
+                    </div>
+
+                    <div class="table-container">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>ID</th>
+                                    <th>手机号</th>
+                                    <th>事项</th>
+                                    <th>预约日期</th>
+                                    <th>提醒类型</th>
+                                    <th>发送状态</th>
+                                    <th>提醒内容</th>
+                                    <th>发送时间</th>
+                                </tr>
+                            </thead>
+                            <tbody id="reminderList">
+                                <tr><td colspan="8" class="loading">加载中...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class="pagination" id="reminderPagination"></div>
                 </div>
             </div>
         </main>

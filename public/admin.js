@@ -3,6 +3,10 @@ const state = {
     items: [],
     appointments: [],
     holidays: [],
+    reminders: [],
+    reminderPage: 1,
+    reminderTotal: 0,
+    reminderPageSize: 20,
     editingItemId: null,
     editingMaterials: [],
     slotModalData: null,
@@ -58,6 +62,44 @@ function getStatusClass(status) {
     return `status-${status}`;
 }
 
+function getReminderTypeText(type) {
+    const map = {
+        created: '预约创建',
+        cancelled: '预约取消',
+        arrived: '已到场',
+        completed: '办理完成'
+    };
+    return map[type] || type;
+}
+
+function getReminderTypeClass(type) {
+    const map = {
+        created: 'status-pending',
+        cancelled: 'status-cancelled',
+        arrived: 'status-arrived',
+        completed: 'status-completed'
+    };
+    return map[type] || '';
+}
+
+function getSendStatusText(status) {
+    const map = {
+        sent: '已发送',
+        failed: '发送失败',
+        pending: '待发送'
+    };
+    return map[status] || status;
+}
+
+function getSendStatusClass(status) {
+    const map = {
+        sent: 'status-completed',
+        failed: 'status-cancelled',
+        pending: 'status-pending'
+    };
+    return map[status] || '';
+}
+
 function initNavigation() {
     document.querySelectorAll('.nav-item').forEach(item => {
         item.addEventListener('click', () => {
@@ -83,7 +125,8 @@ function switchTab(tab) {
         dashboard: '数据概览',
         appointments: '预约管理',
         items: '事项管理',
-        holidays: '节假日管理'
+        holidays: '节假日管理',
+        reminders: '提醒记录'
     };
     document.getElementById('pageTitle').textContent = titles[tab];
 
@@ -95,6 +138,8 @@ function switchTab(tab) {
         loadItems();
     } else if (tab === 'holidays') {
         loadHolidays();
+    } else if (tab === 'reminders') {
+        loadReminders();
     }
 }
 
@@ -597,6 +642,109 @@ function deleteHoliday(id) {
     });
 }
 
+async function loadReminders() {
+    await searchReminders();
+}
+
+async function searchReminders() {
+    const phone = document.getElementById('filterReminderPhone').value.trim();
+    const date = document.getElementById('filterReminderDate').value;
+    const type = document.getElementById('filterReminderType').value;
+    const sendStatus = document.getElementById('filterReminderStatus').value;
+
+    let url = `${API_BASE}/reminders?page=${state.reminderPage}&page_size=${state.reminderPageSize}`;
+    if (phone) url += `&phone=${encodeURIComponent(phone)}`;
+    if (date) url += `&date=${date}`;
+    if (type) url += `&type=${type}`;
+    if (sendStatus) url += `&send_status=${sendStatus}`;
+
+    try {
+        const res = await fetch(url);
+        const data = await res.json();
+        state.reminders = data.list;
+        state.reminderTotal = data.total;
+        state.reminderPage = data.page;
+        renderReminders();
+        renderReminderPagination(data.total_pages);
+    } catch (e) {
+        document.getElementById('reminderList').innerHTML = '<tr><td colspan="8" class="loading">加载失败</td></tr>';
+    }
+}
+
+function renderReminders() {
+    const tbody = document.getElementById('reminderList');
+
+    if (state.reminders.length === 0) {
+        tbody.innerHTML = `
+            <tr>
+                <td colspan="8" class="empty-state">
+                    <div class="empty-icon">📱</div>
+                    <p>暂无提醒记录</p>
+                </td>
+            </tr>
+        `;
+        return;
+    }
+
+    tbody.innerHTML = state.reminders.map(reminder => `
+        <tr>
+            <td>${reminder.id}</td>
+            <td>${reminder.phone}</td>
+            <td>${reminder.item_name || '-'}</td>
+            <td>${reminder.appointment_date || '-'}</td>
+            <td><span class="status-badge ${getReminderTypeClass(reminder.type)}">${getReminderTypeText(reminder.type)}</span></td>
+            <td><span class="status-badge ${getSendStatusClass(reminder.send_status)}">${getSendStatusText(reminder.send_status)}</span></td>
+            <td style="max-width:300px;white-space:normal;">${escapeHtml(reminder.content)}</td>
+            <td>${reminder.created_at ? reminder.created_at.substring(0, 19) : '-'}</td>
+        </tr>
+    `).join('');
+}
+
+function renderReminderPagination(totalPages) {
+    const container = document.getElementById('reminderPagination');
+
+    if (totalPages <= 1) {
+        container.innerHTML = '';
+        return;
+    }
+
+    let html = '<div class="pagination-info">共 ' + state.reminderTotal + ' 条记录</div>';
+    html += '<div class="pagination-buttons">';
+
+    if (state.reminderPage > 1) {
+        html += `<button class="btn btn-sm btn-secondary" onclick="goToReminderPage(${state.reminderPage - 1})">上一页</button>`;
+    }
+
+    const startPage = Math.max(1, state.reminderPage - 2);
+    const endPage = Math.min(totalPages, state.reminderPage + 2);
+
+    for (let i = startPage; i <= endPage; i++) {
+        const active = i === state.reminderPage ? 'active' : '';
+        html += `<button class="btn btn-sm ${active ? 'btn-primary' : 'btn-secondary'}" onclick="goToReminderPage(${i})">${i}</button>`;
+    }
+
+    if (state.reminderPage < totalPages) {
+        html += `<button class="btn btn-sm btn-secondary" onclick="goToReminderPage(${state.reminderPage + 1})">下一页</button>`;
+    }
+
+    html += '</div>';
+    container.innerHTML = html;
+}
+
+function goToReminderPage(page) {
+    state.reminderPage = page;
+    searchReminders();
+}
+
+function resetReminderFilters() {
+    document.getElementById('filterReminderPhone').value = '';
+    document.getElementById('filterReminderDate').value = '';
+    document.getElementById('filterReminderType').value = '';
+    document.getElementById('filterReminderStatus').value = '';
+    state.reminderPage = 1;
+    searchReminders();
+}
+
 function openSlotModal(itemId, itemName) {
     const today = formatDate(new Date());
     state.slotModalData = { itemId, itemName, date: today };
@@ -707,6 +855,12 @@ function initModals() {
         searchAppointments();
     });
 
+    document.getElementById('btnSearchReminder').addEventListener('click', () => {
+        state.reminderPage = 1;
+        searchReminders();
+    });
+    document.getElementById('btnResetReminder').addEventListener('click', resetReminderFilters);
+
     document.querySelectorAll('.modal').forEach(modal => {
         modal.addEventListener('click', (e) => {
             if (e.target === modal) {
@@ -740,5 +894,6 @@ window.openSlotModal = openSlotModal;
 window.addMaterial = addMaterial;
 window.removeMaterial = removeMaterial;
 window.moveMaterial = moveMaterial;
+window.goToReminderPage = goToReminderPage;
 
 document.addEventListener('DOMContentLoaded', init);

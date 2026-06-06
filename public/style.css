@@ -948,3 +948,53 @@ h2 {
         flex-direction: column;
     }
 }
+
+.reminder-box {
+    background: #fff7ed;
+    border-left: 4px solid #ed8936;
+    padding: 12px 14px;
+    border-radius: 0 8px 8px 0;
+    margin-bottom: 12px;
+}
+
+.reminder-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: #7b341e;
+    margin-bottom: 4px;
+}
+
+.reminder-content {
+    font-size: 13px;
+    color: #7b341e;
+    line-height: 1.5;
+}
+
+.detail-reminder {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px dashed #e8e8e8;
+}
+
+.detail-reminder-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: #333;
+    margin-bottom: 6px;
+}
+
+.detail-reminder-content {
+    font-size: 13px;
+    color: #555;
+    line-height: 1.6;
+    padding: 10px 12px;
+    background: #f7fafc;
+    border-radius: 6px;
+    margin-bottom: 4px;
+}
+
+.detail-reminder-time {
+    font-size: 11px;
+    color: #999;
+    text-align: right;
+}

@@ -710,3 +710,26 @@ body {
         width: 100%;
     }
 }
+
+.pagination {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px 0;
+    margin-top: 16px;
+}
+
+.pagination-info {
+    font-size: 13px;
+    color: #666;
+}
+
+.pagination-buttons {
+    display: flex;
+    gap: 6px;
+}
+
+.pagination-buttons .btn-sm.active {
+    background: #667eea;
+    color: white;
+}

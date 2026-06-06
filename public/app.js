@@ -333,8 +333,9 @@ function renderSuccess(appointment) {
     `;
 
     const tips = document.querySelector('.tips');
+    let materialsHtml = '';
     if (state.selectedItemMaterials.length > 0) {
-        tips.innerHTML = `
+        materialsHtml = `
             <p><strong>📋 所需材料清单：</strong></p>
             <ul class="material-tips-list">
                 ${state.selectedItemMaterials.map(m => `
@@ -344,22 +345,40 @@ function renderSuccess(appointment) {
                     </li>
                 `).join('')}
             </ul>
-            <p style="margin-top:12px;"><strong>温馨提示：</strong></p>
-            <ul>
-                <li>请您在预约时段前10分钟到达办事大厅</li>
-                <li>请务必携带好上述材料，以免影响办理</li>
-                <li>如需取消预约，可通过首页"查询/取消预约"功能凭预约编号和手机号在线取消</li>
-            </ul>
         `;
-    } else {
-        tips.innerHTML = `
-            <p><strong>温馨提示：</strong></p>
-            <ul>
-                <li>请您在预约时段前10分钟到达办事大厅</li>
-                <li>请携带好相关证件和材料</li>
-                <li>如需取消预约，可通过首页"查询/取消预约"功能凭预约编号和手机号在线取消</li>
-            </ul>
-        `;
+    }
+
+    tips.innerHTML = `
+        <div class="reminder-box" id="latestReminderBox" style="display:none;">
+            <div class="reminder-title">📱 最近提醒</div>
+            <div class="reminder-content" id="latestReminderContent"></div>
+        </div>
+        ${materialsHtml}
+        <p style="margin-top:12px;"><strong>温馨提示：</strong></p>
+        <ul>
+            <li>请您在预约时段前10分钟到达办事大厅</li>
+            <li>${state.selectedItemMaterials.length > 0 ? '请务必携带好上述材料，以免影响办理' : '请携带好相关证件和材料'}</li>
+            <li>如需取消预约，可通过首页"查询/取消预约"功能凭预约编号和手机号在线取消</li>
+        </ul>
+    `;
+
+    loadLatestReminder(appointment.phone);
+}
+
+async function loadLatestReminder(phone) {
+    try {
+        const res = await fetch(`${API_BASE}/reminders/latest?phone=${encodeURIComponent(phone)}`);
+        if (res.ok) {
+            const data = await res.json();
+            const box = document.getElementById('latestReminderBox');
+            const content = document.getElementById('latestReminderContent');
+            if (box && content && data.content) {
+                content.textContent = data.content;
+                box.style.display = 'block';
+            }
+        }
+    } catch (e) {
+        console.error('加载最新提醒失败', e);
     }
 }
 
@@ -483,6 +502,8 @@ async function submitQuery() {
 
         renderAppointmentDetail(data, materials);
 
+        loadLatestReminderForDetail(data.phone);
+
         document.getElementById('queryForm').style.display = 'none';
         document.getElementById('queryResult').style.display = 'block';
     } catch (e) {
@@ -547,6 +568,11 @@ function renderAppointmentDetail(appointment, materials = []) {
                 <span class="detail-value">${appointment.created_at || ''}</span>
             </div>
             ${materialsHtml}
+            <div class="detail-reminder" id="detailReminder" style="display:none;">
+                <div class="detail-reminder-title">📱 最近提醒</div>
+                <div class="detail-reminder-content" id="detailReminderContent"></div>
+                <div class="detail-reminder-time" id="detailReminderTime"></div>
+            </div>
         </div>
         ${canCancel ? '<div class="detail-tip">💡 该预约处于待办理状态，您可以在线取消</div>' : ''}
         ${appointment.status === 'cancelled' ? '<div class="detail-tip detail-tip-muted">该预约已取消，号源已释放</div>' : ''}
@@ -561,6 +587,27 @@ function renderAppointmentDetail(appointment, materials = []) {
         cancelBtn.style.display = 'block';
     } else {
         cancelBtn.style.display = 'none';
+    }
+}
+
+async function loadLatestReminderForDetail(phone) {
+    try {
+        const res = await fetch(`${API_BASE}/reminders/latest?phone=${encodeURIComponent(phone)}`);
+        if (res.ok) {
+            const data = await res.json();
+            const box = document.getElementById('detailReminder');
+            const content = document.getElementById('detailReminderContent');
+            const time = document.getElementById('detailReminderTime');
+            if (box && content && data.content) {
+                content.textContent = data.content;
+                if (time && data.created_at) {
+                    time.textContent = data.created_at.substring(0, 19);
+                }
+                box.style.display = 'block';
+            }
+        }
+    } catch (e) {
+        console.error('加载最新提醒失败', e);
     }
 }
 
@@ -605,6 +652,7 @@ async function confirmCancelAppointment() {
 
         state.currentAppointment.status = 'cancelled';
         renderAppointmentDetail(state.currentAppointment);
+        loadLatestReminderForDetail(state.currentAppointment.phone);
     } catch (e) {
         showToast(e.message, 'error');
     } finally {
