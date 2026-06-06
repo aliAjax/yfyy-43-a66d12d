@@ -133,6 +133,16 @@ function getTodayStr() {
   return today.toISOString().split('T')[0];
 }
 
+function isValidDate(dateStr) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return false;
+  const date = new Date(dateStr);
+  if (isNaN(date.getTime())) return false;
+  const year = date.getFullYear();
+  const month = (date.getMonth() + 1).toString().padStart(2, '0');
+  const day = date.getDate().toString().padStart(2, '0');
+  return `${year}-${month}-${day}` === dateStr;
+}
+
 function isWorkday(dateStr) {
   const date = new Date(dateStr);
   const day = date.getDay();
@@ -330,6 +340,9 @@ app.post('/api/holidays', (req, res) => {
   if (!date) {
     return res.status(400).json({ error: '日期不能为空' });
   }
+  if (!isValidDate(date)) {
+    return res.status(400).json({ error: '日期格式不正确，应为有效的 YYYY-MM-DD 日期' });
+  }
   try {
     const result = db.prepare('INSERT INTO holidays (date, name) VALUES (?, ?)').run(date, name || '');
     res.json({ id: result.lastInsertRowid, date, name: name || '' });
@@ -351,20 +364,38 @@ app.post('/api/holidays/batch', (req, res) => {
   }
 
   try {
+    const validHolidays = [];
+    const invalidItems = [];
+
+    holidays.forEach((h, index) => {
+      if (!h.date || !isValidDate(h.date)) {
+        invalidItems.push({ index: index + 1, date: h.date || '', name: h.name || '', error: '日期格式无效' });
+      } else {
+        validHolidays.push(h);
+      }
+    });
+
+    if (validHolidays.length === 0) {
+      return res.status(400).json({ error: '没有有效的节假日数据', invalid: invalidItems });
+    }
+
     const insertStmt = db.prepare('INSERT OR REPLACE INTO holidays (date, name) VALUES (?, ?)');
     const insertMany = db.transaction((holidayList) => {
       let count = 0;
       for (const h of holidayList) {
-        if (h.date && /^\d{4}-\d{2}-\d{2}$/.test(h.date)) {
-          insertStmt.run(h.date, h.name || '');
-          count++;
-        }
+        insertStmt.run(h.date, h.name || '');
+        count++;
       }
       return count;
     });
 
-    const imported = insertMany(holidays);
-    res.json({ success: true, imported });
+    const imported = insertMany(validHolidays);
+    res.json({
+      success: true,
+      imported,
+      total: holidays.length,
+      invalid: invalidItems
+    });
   } catch (e) {
     res.status(500).json({ error: '批量导入失败' });
   }
