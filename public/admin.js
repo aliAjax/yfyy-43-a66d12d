@@ -1629,38 +1629,34 @@ async function saveSlot() {
     if (useWindows) {
         const windowInputs = document.querySelectorAll('.window-slot-max');
         const windowData = [];
-        
+
         for (const input of windowInputs) {
             const windowId = parseInt(input.dataset.windowId, 10);
             const maxCount = parseInt(input.value, 10);
-            
+
             if (isNaN(maxCount) || maxCount < 0) {
                 showToast('请输入有效的号源数量', 'error');
                 return;
             }
-            
+
             windowData.push({ window_id: windowId, max_count: maxCount });
         }
 
         try {
-            const promises = windowData.map(w => 
-                fetch(`${API_BASE}/slots/${itemId}/${date}/window/${w.window_id}/max`, {
-                    method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ max_count: w.max_count })
-                }).then(res => res.json().then(data => ({ ok: res.ok, data })))
-            );
+            const res = await fetch(`${API_BASE}/slots/${itemId}/${date}/windows/max`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ windows: windowData })
+            });
 
-            const results = await Promise.all(promises);
-            const failed = results.find(r => !r.ok);
-            
-            if (failed) {
-                throw new Error(failed.data.error || '保存失败');
+            const data = await res.json();
+            if (!res.ok) {
+                throw new Error(data.error || '保存失败');
             }
 
             showToast('保存成功', 'success');
             document.getElementById('slotModal').classList.remove('show');
-            
+
             if (state.currentTab === 'items') {
                 loadItems();
             }

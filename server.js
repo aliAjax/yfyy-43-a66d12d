@@ -1273,11 +1273,100 @@ app.put('/api/appointments/:id/status', (req, res) => {
   res.json({ success: true, status });
 });
 
+function parseSlotMaxCount(value) {
+  const parsed = parseInt(value, 10);
+  return Number.isInteger(parsed) ? parsed : NaN;
+}
+
+app.put('/api/slots/:itemId/:date/windows/max', (req, res) => {
+  const { itemId, date } = req.params;
+  const { windows } = req.body;
+
+  if (!Array.isArray(windows) || windows.length === 0) {
+    return res.status(400).json({ error: '窗口号源数据不能为空' });
+  }
+
+  const item = db.prepare('SELECT * FROM items WHERE id = ?').get(itemId);
+  if (!item) {
+    return res.status(404).json({ error: '事项不存在' });
+  }
+
+  const seenWindowIds = new Set();
+  const updates = [];
+
+  for (const entry of windows) {
+    const windowId = parseInt(entry.window_id, 10);
+    const maxCount = parseSlotMaxCount(entry.max_count);
+
+    if (!windowId || seenWindowIds.has(windowId)) {
+      return res.status(400).json({ error: '窗口号源数据无效' });
+    }
+    seenWindowIds.add(windowId);
+
+    if (isNaN(maxCount) || maxCount < 0) {
+      return res.status(400).json({ error: '号源数量不能小于0' });
+    }
+
+    const window = db.prepare('SELECT * FROM windows WHERE id = ?').get(windowId);
+    if (!window) {
+      return res.status(404).json({ error: `窗口不存在：${windowId}` });
+    }
+
+    const itemWindow = db.prepare(
+      'SELECT * FROM item_windows WHERE item_id = ? AND window_id = ?'
+    ).get(itemId, windowId);
+    if (!itemWindow) {
+      return res.status(400).json({ error: `窗口"${window.name}"未配置此事项` });
+    }
+
+    const existing = db.prepare(
+      'SELECT * FROM window_slots WHERE window_id = ? AND item_id = ? AND date = ?'
+    ).get(windowId, itemId, date);
+
+    const usedCount = db.prepare(
+      `SELECT COUNT(*) as cnt FROM appointments
+       WHERE window_id = ? AND item_id = ? AND appointment_date = ? AND status != 'cancelled'`
+    ).get(windowId, itemId, date).cnt;
+
+    if (maxCount < usedCount) {
+      return res.status(400).json({ error: `窗口"${window.name}"号源数量不能小于已预约数量` });
+    }
+
+    updates.push({ windowId, maxCount, usedCount, existing: !!existing });
+  }
+
+  const tx = db.transaction(() => {
+    updates.forEach(({ windowId, maxCount, usedCount, existing }) => {
+      if (existing) {
+        db.prepare(
+          'UPDATE window_slots SET max_count = ? WHERE window_id = ? AND item_id = ? AND date = ?'
+        ).run(maxCount, windowId, itemId, date);
+      } else {
+        db.prepare(
+          'INSERT INTO window_slots (window_id, item_id, date, max_count, current_count) VALUES (?, ?, ?, ?, ?)'
+        ).run(windowId, itemId, date, maxCount, usedCount);
+      }
+    });
+  });
+
+  tx();
+
+  const updated = db.prepare(`
+    SELECT ws.*, w.name as window_name
+    FROM window_slots ws
+    LEFT JOIN windows w ON ws.window_id = w.id
+    WHERE ws.item_id = ? AND ws.date = ?
+    ORDER BY w.sort_order ASC, w.id ASC
+  `).all(itemId, date);
+
+  res.json({ success: true, windows: updated });
+});
+
 app.put('/api/slots/:itemId/:date/window/:windowId/max', (req, res) => {
   const { itemId, date, windowId } = req.params;
-  const { max_count } = req.body;
+  const maxCount = parseSlotMaxCount(req.body.max_count);
 
-  if (!max_count || max_count < 0) {
+  if (isNaN(maxCount) || maxCount < 0) {
     return res.status(400).json({ error: '号源数量不能小于0' });
   }
 
@@ -1308,19 +1397,19 @@ app.put('/api/slots/:itemId/:date/window/:windowId/max', (req, res) => {
   ).get(windowId, itemId, date).cnt;
 
   if (existing) {
-    if (max_count < usedCount) {
+    if (maxCount < usedCount) {
       return res.status(400).json({ error: '号源数量不能小于已预约数量' });
     }
     db.prepare(
       'UPDATE window_slots SET max_count = ? WHERE window_id = ? AND item_id = ? AND date = ?'
-    ).run(max_count, windowId, itemId, date);
+    ).run(maxCount, windowId, itemId, date);
   } else {
     db.prepare(
       'INSERT INTO window_slots (window_id, item_id, date, max_count, current_count) VALUES (?, ?, ?, ?, ?)'
-    ).run(windowId, itemId, date, max_count, usedCount);
+    ).run(windowId, itemId, date, maxCount, usedCount);
   }
 
-  res.json({ success: true, max_count: parseInt(max_count) });
+  res.json({ success: true, max_count: maxCount });
 });
 
 app.put('/api/slots/:itemId/:date/max', (req, res) => {
