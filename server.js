@@ -757,6 +757,12 @@ app.put('/api/appointments/:id/status', (req, res) => {
     if (oldStatus !== 'arrived') {
       return res.status(400).json({ error: '只有已到场的预约才能叫号' });
     }
+    const existingCalling = db.prepare(
+      'SELECT id FROM appointments WHERE item_id = ? AND appointment_date = ? AND status = ? AND id != ?'
+    ).get(appointment.item_id, appointment.appointment_date, 'calling', id);
+    if (existingCalling) {
+      return res.status(400).json({ error: '该事项已有正在叫号的预约，请先完成或取消' });
+    }
     db.prepare('UPDATE appointments SET status = ?, called_at = CURRENT_TIMESTAMP WHERE id = ?').run(status, id);
   } else {
     db.prepare('UPDATE appointments SET status = ? WHERE id = ?').run(status, id);

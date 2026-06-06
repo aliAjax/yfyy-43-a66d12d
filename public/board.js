@@ -107,20 +107,155 @@ function renderBoard(data) {
         return;
     }
 
-    let html = '<div class="items-grid">';
+    const timeSlots = groupByTimeSlot(data);
 
+    if (timeSlots.length === 0) {
+        content.innerHTML = `
+            <div class="empty-state">
+                <div class="empty-icon">⏰</div>
+                <p>今日暂无预约时段</p>
+            </div>
+        `;
+        return;
+    }
+
+    let html = '<div class="time-slots-container">';
+    timeSlots.forEach(slot => {
+        html += renderTimeSlotCard(slot);
+    });
+    html += '</div>';
+
+    html += '<div class="items-section">';
+    html += '<h2 class="section-header">📋 各事项详情</h2>';
+    html += '<div class="items-grid">';
     data.items.forEach(item => {
         html += renderItemCard(item);
     });
-
     html += '</div>';
+    html += '</div>';
+
     content.innerHTML = html;
+}
+
+function groupByTimeSlot(data) {
+    const slotMap = new Map();
+
+    data.items.forEach(item => {
+        const allApts = [...item.calling, ...item.waiting, ...item.pending];
+        allApts.forEach(apt => {
+            const time = apt.time_slot;
+            if (!slotMap.has(time)) {
+                slotMap.set(time, {
+                    time_slot: time,
+                    calling: [],
+                    waiting: [],
+                    pending: [],
+                    completed: []
+                });
+            }
+            const slot = slotMap.get(time);
+            const aptWithItem = { ...apt, item_name: item.item_name, item_id: item.item_id };
+            if (apt.status === 'calling') {
+                slot.calling.push(aptWithItem);
+            } else if (apt.status === 'arrived') {
+                slot.waiting.push(aptWithItem);
+            } else if (apt.status === 'pending') {
+                slot.pending.push(aptWithItem);
+            } else if (apt.status === 'completed') {
+                slot.completed.push(aptWithItem);
+            }
+        });
+    });
+
+    const slots = Array.from(slotMap.values()).sort((a, b) => a.time_slot.localeCompare(b.time_slot));
+    return slots;
+}
+
+function renderTimeSlotCard(slot) {
+    const total = slot.calling.length + slot.waiting.length + slot.pending.length + slot.completed.length;
+    const hasCalling = slot.calling.length > 0;
+
+    return `
+        <div class="time-slot-card ${hasCalling ? 'has-calling' : ''}">
+            <div class="time-slot-header">
+                <div class="time-slot-time">
+                    <span class="time-icon">🕐</span>
+                    <span class="time-text">${slot.time_slot}</span>
+                </div>
+                <div class="time-slot-counts">
+                    <span class="count-tag tag-calling">叫号 ${slot.calling.length}</span>
+                    <span class="count-tag tag-waiting">等待 ${slot.waiting.length}</span>
+                    <span class="count-tag tag-pending">待到场 ${slot.pending.length}</span>
+                    <span class="count-tag tag-completed">完成 ${slot.completed.length}</span>
+                </div>
+            </div>
+
+            <div class="time-slot-body">
+                ${slot.calling.length > 0 ? `
+                    <div class="slot-calling-section">
+                        <div class="slot-section-title">🔔 正在叫号</div>
+                        <div class="slot-calling-list">
+                            ${slot.calling.map(apt => `
+                                <div class="slot-calling-item calling-pulse" data-id="${apt.id}">
+                                    <div class="slot-calling-number">${padNumber(apt.queue_number)}</div>
+                                    <div class="slot-calling-info">
+                                        <div class="slot-calling-name">${escapeHtml(apt.user_name)}</div>
+                                        <div class="slot-calling-item-name">${escapeHtml(apt.item_name)}</div>
+                                    </div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                ` : ''}
+
+                ${slot.waiting.length > 0 ? `
+                    <div class="slot-waiting-section">
+                        <div class="slot-section-title">📋 等待办理 (${slot.waiting.length})</div>
+                        <div class="slot-waiting-list">
+                            ${slot.waiting.slice(0, 6).map((apt, idx) => `
+                                <div class="slot-waiting-item ${idx < 3 ? 'priority' : ''}">
+                                    <span class="slot-waiting-num">${padNumber(apt.queue_number)}</span>
+                                    <span class="slot-waiting-name">${escapeHtml(apt.user_name)}</span>
+                                    <span class="slot-waiting-item-name">${escapeHtml(apt.item_name)}</span>
+                                </div>
+                            `).join('')}
+                            ${slot.waiting.length > 6 ? `
+                                <div class="slot-waiting-more">还有 ${slot.waiting.length - 6} 人...</div>
+                            ` : ''}
+                        </div>
+                    </div>
+                ` : ''}
+
+                ${slot.pending.length > 0 ? `
+                    <div class="slot-pending-section">
+                        <div class="slot-section-title">⏳ 待到场 (${slot.pending.length})</div>
+                        <div class="slot-pending-list">
+                            ${slot.pending.slice(0, 4).map(apt => `
+                                <div class="slot-pending-item">
+                                    <span class="slot-pending-num">${padNumber(apt.queue_number)}</span>
+                                    <span class="slot-pending-name">${escapeHtml(apt.user_name)}</span>
+                                    <span class="slot-pending-item-name">${escapeHtml(apt.item_name)}</span>
+                                </div>
+                            `).join('')}
+                            ${slot.pending.length > 4 ? `
+                                <div class="slot-pending-more">还有 ${slot.pending.length - 4} 人未到场</div>
+                            ` : ''}
+                        </div>
+                    </div>
+                ` : ''}
+
+                ${total === 0 ? `
+                    <div class="slot-empty">该时段暂无预约</div>
+                ` : ''}
+            </div>
+        </div>
+    `;
 }
 
 function renderItemCard(item) {
     const hasCalling = item.calling.length > 0;
-    const waitingList = item.waiting.slice(0, 8);
-    const hasMoreWaiting = item.waiting.length > 8;
+    const waitingList = item.waiting.slice(0, 6);
+    const hasMoreWaiting = item.waiting.length > 6;
 
     return `
         <div class="item-card ${hasCalling ? 'has-calling' : ''}">
@@ -168,7 +303,7 @@ function renderItemCard(item) {
                                 </div>
                             `).join('')}
                             ${hasMoreWaiting ? `
-                                <div class="waiting-more">还有 ${item.waiting.length - 8} 人等待...</div>
+                                <div class="waiting-more">还有 ${item.waiting.length - 6} 人等待...</div>
                             ` : ''}
                         </div>
                     ` : `
