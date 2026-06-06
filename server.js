@@ -721,6 +721,12 @@ app.get('/api/slots/:itemId/:date', (req, res) => {
     return res.status(404).json({ error: '事项不存在' });
   }
 
+  const allItemWindows = db.prepare(`
+    SELECT COUNT(*) as cnt
+    FROM item_windows iw
+    WHERE iw.item_id = ?
+  `).get(itemId).cnt;
+
   const itemWindows = db.prepare(`
     SELECT iw.*, w.name as window_name, w.status as window_status, w.sort_order
     FROM item_windows iw
@@ -728,6 +734,21 @@ app.get('/api/slots/:itemId/:date', (req, res) => {
     WHERE iw.item_id = ? AND w.status = 'active'
     ORDER BY w.sort_order ASC, w.id ASC
   `).all(itemId);
+
+  if (allItemWindows > 0 && itemWindows.length === 0) {
+    res.json({
+      available: false,
+      reason: '该事项暂无可用办理窗口',
+      date,
+      max_count: 0,
+      current_count: 0,
+      available_count: 0,
+      time_slots: [],
+      use_windows: true,
+      windows: []
+    });
+    return;
+  }
 
   if (itemWindows.length === 0) {
     let slot = db.prepare('SELECT * FROM daily_slots WHERE item_id = ? AND date = ?').get(itemId, date);
@@ -927,6 +948,12 @@ app.post('/api/appointments', (req, res) => {
     return res.status(400).json({ error: '该时段已被预约，请选择其他时段' });
   }
 
+  const allItemWindows = db.prepare(`
+    SELECT COUNT(*) as cnt
+    FROM item_windows iw
+    WHERE iw.item_id = ?
+  `).get(item_id).cnt;
+
   const itemWindows = db.prepare(`
     SELECT iw.*, w.name as window_name, w.status as window_status
     FROM item_windows iw
@@ -934,6 +961,10 @@ app.post('/api/appointments', (req, res) => {
     WHERE iw.item_id = ? AND w.status = 'active'
     ORDER BY w.sort_order ASC, w.id ASC
   `).all(item_id);
+
+  if (allItemWindows > 0 && itemWindows.length === 0) {
+    return res.status(400).json({ error: '该事项暂无可用办理窗口' });
+  }
 
   let assignedWindowId = null;
 

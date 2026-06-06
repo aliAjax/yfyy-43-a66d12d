@@ -670,7 +670,7 @@ function renderWindowConfigList() {
     container.innerHTML = activeWindows.map(win => {
         const itemWin = state.editingItemWindows.find(iw => iw.window_id === win.id);
         const isChecked = !!itemWin;
-        const maxCount = itemWin ? (itemWin.default_max_count || '') : '';
+        const maxCount = itemWin ? (itemWin.default_capacity || '') : '';
         return `
             <div class="window-config-item" data-window-id="${win.id}">
                 <label class="window-config-checkbox">
@@ -694,7 +694,7 @@ function renderWindowConfigList() {
             if (isChecked) {
                 const existing = state.editingItemWindows.find(iw => iw.window_id === windowId);
                 if (!existing) {
-                    state.editingItemWindows.push({ window_id: windowId, default_max_count: 20 });
+                    state.editingItemWindows.push({ window_id: windowId, default_capacity: 20 });
                 }
                 inputEl.disabled = false;
                 if (!inputEl.value) {
@@ -712,7 +712,7 @@ function renderWindowConfigList() {
             const windowId = parseInt(e.target.dataset.windowId, 10);
             const itemWin = state.editingItemWindows.find(iw => iw.window_id === windowId);
             if (itemWin) {
-                itemWin.default_max_count = parseInt(e.target.value, 10) || 0;
+                itemWin.default_capacity = parseInt(e.target.value, 10) || 0;
             }
         });
     });
@@ -1556,15 +1556,17 @@ async function toggleWindowStatus(id, status) {
 
 function openSlotModal(itemId, itemName) {
     const today = formatDate(new Date());
-    state.slotModalData = { itemId, itemName, date: today };
+    state.slotModalData = { itemId, itemName, date: today, useWindows: false, windowSlots: [] };
 
     document.getElementById('slotInfo').innerHTML = `
         <p><strong>事项：</strong>${escapeHtml(itemName)}</p>
         <p><strong>日期：</strong><input type="date" id="slotDate" value="${today}" style="width:auto;padding:4px 8px;border:1px solid #d9d9d9;border-radius:4px;font-size:13px;"></p>
-        <p><strong>当前号源：</strong><span id="slotCurrentCount">-</span> / <span id="slotCurrentMax">-</span></p>
+        <p id="slotSummary"><strong>当前号源：</strong><span id="slotCurrentCount">-</span> / <span id="slotCurrentMax">-</span></p>
     `;
 
     document.getElementById('slotMaxCount').value = '';
+    document.getElementById('slotTotalGroup').style.display = 'block';
+    document.getElementById('slotWindowsGroup').style.display = 'none';
     document.getElementById('slotModal').classList.add('show');
 
     loadSlotInfo(itemId, today);
@@ -1580,10 +1582,22 @@ async function loadSlotInfo(itemId, date) {
         const res = await fetch(`${API_BASE}/slots/${itemId}/${date}`);
         const data = await res.json();
 
-        if (data.available !== undefined) {
+        state.slotModalData.useWindows = data.use_windows || false;
+
+        if (data.available !== undefined || data.use_windows) {
             document.getElementById('slotCurrentCount').textContent = data.current_count || 0;
             document.getElementById('slotCurrentMax').textContent = data.max_count || 0;
-            document.getElementById('slotMaxCount').value = data.max_count || 20;
+
+            if (data.use_windows && data.windows && data.windows.length > 0) {
+                state.slotModalData.windowSlots = data.windows;
+                document.getElementById('slotTotalGroup').style.display = 'none';
+                document.getElementById('slotWindowsGroup').style.display = 'block';
+                renderSlotWindowList(data.windows);
+            } else {
+                document.getElementById('slotTotalGroup').style.display = 'block';
+                document.getElementById('slotWindowsGroup').style.display = 'none';
+                document.getElementById('slotMaxCount').value = data.max_count || 20;
+            }
         } else {
             document.getElementById('slotCurrentCount').textContent = '-';
             document.getElementById('slotCurrentMax').textContent = '不可预约';
@@ -1593,35 +1607,95 @@ async function loadSlotInfo(itemId, date) {
     }
 }
 
+function renderSlotWindowList(windows) {
+    const container = document.getElementById('slotWindowList');
+    container.innerHTML = windows.map(win => `
+        <div class="window-slot-item" data-window-id="${win.window_id}">
+            <div class="window-slot-info">
+                <span class="window-slot-name">${escapeHtml(win.window_name)}</span>
+                <span class="window-slot-usage">已用: ${win.current_count || 0} / ${win.max_count || 0}</span>
+            </div>
+            <div class="window-slot-input">
+                <input type="number" class="window-slot-max" value="${win.max_count || 0}" min="0" max="500" data-window-id="${win.window_id}">
+                <span class="window-slot-unit">个</span>
+            </div>
+        </div>
+    `).join('');
+}
+
 async function saveSlot() {
-    const { itemId, date } = state.slotModalData;
-    const maxCount = document.getElementById('slotMaxCount').value;
+    const { itemId, date, useWindows } = state.slotModalData;
 
-    if (!maxCount || maxCount < 1) {
-        showToast('请输入有效的号源数量', 'error');
-        return;
-    }
-
-    try {
-        const res = await fetch(`${API_BASE}/slots/${itemId}/${date}/max`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ max_count: parseInt(maxCount) })
-        });
-
-        const data = await res.json();
-        if (!res.ok) {
-            throw new Error(data.error || '保存失败');
-        }
-
-        showToast('保存成功', 'success');
-        document.getElementById('slotModal').classList.remove('show');
+    if (useWindows) {
+        const windowInputs = document.querySelectorAll('.window-slot-max');
+        const windowData = [];
         
-        if (state.currentTab === 'items') {
-            loadItems();
+        for (const input of windowInputs) {
+            const windowId = parseInt(input.dataset.windowId, 10);
+            const maxCount = parseInt(input.value, 10);
+            
+            if (isNaN(maxCount) || maxCount < 0) {
+                showToast('请输入有效的号源数量', 'error');
+                return;
+            }
+            
+            windowData.push({ window_id: windowId, max_count: maxCount });
         }
-    } catch (e) {
-        showToast(e.message, 'error');
+
+        try {
+            const promises = windowData.map(w => 
+                fetch(`${API_BASE}/slots/${itemId}/${date}/window/${w.window_id}/max`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ max_count: w.max_count })
+                }).then(res => res.json().then(data => ({ ok: res.ok, data })))
+            );
+
+            const results = await Promise.all(promises);
+            const failed = results.find(r => !r.ok);
+            
+            if (failed) {
+                throw new Error(failed.data.error || '保存失败');
+            }
+
+            showToast('保存成功', 'success');
+            document.getElementById('slotModal').classList.remove('show');
+            
+            if (state.currentTab === 'items') {
+                loadItems();
+            }
+        } catch (e) {
+            showToast(e.message, 'error');
+        }
+    } else {
+        const maxCount = document.getElementById('slotMaxCount').value;
+
+        if (!maxCount || maxCount < 1) {
+            showToast('请输入有效的号源数量', 'error');
+            return;
+        }
+
+        try {
+            const res = await fetch(`${API_BASE}/slots/${itemId}/${date}/max`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ max_count: parseInt(maxCount) })
+            });
+
+            const data = await res.json();
+            if (!res.ok) {
+                throw new Error(data.error || '保存失败');
+            }
+
+            showToast('保存成功', 'success');
+            document.getElementById('slotModal').classList.remove('show');
+            
+            if (state.currentTab === 'items') {
+                loadItems();
+            }
+        } catch (e) {
+            showToast(e.message, 'error');
+        }
     }
 }
 

@@ -570,10 +570,15 @@
         <div class="modal-content">
             <h3>设置号源数量</h3>
             <div class="slot-info" id="slotInfo"></div>
-            <div class="form-group">
+            <div class="form-group" id="slotTotalGroup">
                 <label>号源数量 <span class="required">*</span></label>
-                <input type="number" id="slotMaxCount" min="1" max="200">
+                <input type="number" id="slotMaxCount" min="1" max="500">
                 <small class="form-tip">设置当日该事项可预约的最大数量</small>
+            </div>
+            <div class="form-group" id="slotWindowsGroup" style="display:none;">
+                <label>各窗口号源设置</label>
+                <div id="slotWindowList" class="window-slot-list"></div>
+                <small class="form-tip">分别设置每个窗口当日的号源数量</small>
             </div>
             <div class="modal-actions">
                 <button class="btn btn-secondary" id="btnCancelSlot">取消</button>
