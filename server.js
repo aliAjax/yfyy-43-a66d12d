@@ -994,15 +994,22 @@ app.post('/api/appointments/:id/call', (req, res) => {
     return res.status(400).json({ error: '只有已到场的预约才能叫号' });
   }
 
+  const currentCalling = db.prepare(
+    'SELECT id FROM appointments WHERE item_id = ? AND appointment_date = ? AND status = ?'
+  ).get(appointment.item_id, appointment.appointment_date, 'calling');
+
+  if (currentCalling) {
+    return res.status(400).json({ error: '该事项已有正在叫号的预约，请先完成或取消' });
+  }
+
   const item = db.prepare('SELECT name FROM items WHERE id = ?').get(appointment.item_id);
 
   const tx = db.transaction(() => {
-    const currentCalling = db.prepare(
+    const recheck = db.prepare(
       'SELECT id FROM appointments WHERE item_id = ? AND appointment_date = ? AND status = ?'
     ).get(appointment.item_id, appointment.appointment_date, 'calling');
-
-    if (currentCalling) {
-      return res.status(400).json({ error: '该事项已有正在叫号的预约，请先完成或取消' });
+    if (recheck) {
+      throw new Error('该事项已有正在叫号的预约');
     }
 
     db.prepare('UPDATE appointments SET status = ?, called_at = CURRENT_TIMESTAMP WHERE id = ?').run('calling', id);
@@ -1022,7 +1029,11 @@ app.post('/api/appointments/:id/call', (req, res) => {
     res.json({ success: true, message: '叫号成功' });
   } catch (e) {
     if (!res.headersSent) {
-      res.status(500).json({ error: '叫号失败' });
+      if (e.message === '该事项已有正在叫号的预约') {
+        res.status(400).json({ error: e.message });
+      } else {
+        res.status(500).json({ error: '叫号失败' });
+      }
     }
   }
 });
@@ -1122,6 +1133,13 @@ app.post('/api/items/:itemId/call-next', (req, res) => {
   }
 
   const tx = db.transaction(() => {
+    const recheck = db.prepare(
+      'SELECT id FROM appointments WHERE item_id = ? AND appointment_date = ? AND status = ?'
+    ).get(itemId, today, 'calling');
+    if (recheck) {
+      throw new Error('该事项已有正在叫号的预约');
+    }
+
     db.prepare('UPDATE appointments SET status = ?, called_at = CURRENT_TIMESTAMP WHERE id = ?').run('calling', nextApt.id);
     const reminderContent = generateReminderContent('calling', {
       item_name: item.name,
@@ -1137,7 +1155,11 @@ app.post('/api/items/:itemId/call-next', (req, res) => {
     tx();
     res.json({ success: true, has_next: true, appointment: nextApt, message: '叫号成功' });
   } catch (e) {
-    res.status(500).json({ error: '叫号失败' });
+    if (e.message === '该事项已有正在叫号的预约') {
+      res.status(400).json({ error: e.message });
+    } else {
+      res.status(500).json({ error: '叫号失败' });
+    }
   }
 });
 

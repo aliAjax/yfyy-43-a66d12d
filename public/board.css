@@ -384,6 +384,52 @@ body {
     font-style: italic;
 }
 
+.slot-completed-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.slot-completed-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 12px;
+    background: rgba(149, 225, 163, 0.08);
+    border-radius: 6px;
+    opacity: 0.8;
+}
+
+.slot-completed-num {
+    font-size: 14px;
+    font-weight: bold;
+    font-family: 'Courier New', monospace;
+    color: #95e1a3;
+    min-width: 45px;
+    text-decoration: line-through;
+    opacity: 0.7;
+}
+
+.slot-completed-name {
+    flex: 1;
+    font-size: 14px;
+    color: rgba(255, 255, 255, 0.6);
+    text-decoration: line-through;
+}
+
+.slot-completed-item-name {
+    font-size: 12px;
+    color: rgba(149, 225, 163, 0.5);
+}
+
+.slot-completed-more {
+    text-align: center;
+    padding: 6px;
+    color: rgba(149, 225, 163, 0.5);
+    font-size: 13px;
+    font-style: italic;
+}
+
 .slot-empty {
     text-align: center;
     padding: 30px 20px;

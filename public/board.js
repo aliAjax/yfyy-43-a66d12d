@@ -141,7 +141,7 @@ function groupByTimeSlot(data) {
     const slotMap = new Map();
 
     data.items.forEach(item => {
-        const allApts = [...item.calling, ...item.waiting, ...item.pending];
+        const allApts = [...item.calling, ...item.waiting, ...item.pending, ...item.completed];
         allApts.forEach(apt => {
             const time = apt.time_slot;
             if (!slotMap.has(time)) {
@@ -239,6 +239,24 @@ function renderTimeSlotCard(slot) {
                             `).join('')}
                             ${slot.pending.length > 4 ? `
                                 <div class="slot-pending-more">还有 ${slot.pending.length - 4} 人未到场</div>
+                            ` : ''}
+                        </div>
+                    </div>
+                ` : ''}
+
+                ${slot.completed.length > 0 ? `
+                    <div class="slot-completed-section">
+                        <div class="slot-section-title">✅ 已完成 (${slot.completed.length})</div>
+                        <div class="slot-completed-list">
+                            ${slot.completed.slice(0, 5).map(apt => `
+                                <div class="slot-completed-item">
+                                    <span class="slot-completed-num">${padNumber(apt.queue_number)}</span>
+                                    <span class="slot-completed-name">${escapeHtml(apt.user_name)}</span>
+                                    <span class="slot-completed-item-name">${escapeHtml(apt.item_name)}</span>
+                                </div>
+                            `).join('')}
+                            ${slot.completed.length > 5 ? `
+                                <div class="slot-completed-more">还有 ${slot.completed.length - 5} 人已完成</div>
                             ` : ''}
                         </div>
                     </div>
