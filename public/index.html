@@ -154,6 +154,7 @@
                     <div class="query-actions">
                         <button class="btn btn-secondary" id="backToQuery">重新查询</button>
                         <button class="btn btn-danger" id="cancelAppointmentBtn" style="display:none;">取消预约</button>
+                        <button class="btn btn-primary" id="reviewBtn" style="display:none;">⭐ 办理评价</button>
                     </div>
                 </div>
             </div>
@@ -169,6 +170,47 @@
                 <button class="btn btn-secondary" id="cancelCancelBtn">再想想</button>
                 <button class="btn btn-danger" id="confirmCancelBtn">确认取消</button>
             </div>
+        </div>
+    </div>
+
+    <div class="modal" id="reviewModal">
+        <div class="modal-content review-modal-content">
+            <div class="modal-header">
+                <h3>办理评价</h3>
+                <button class="modal-close" id="closeReviewModal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="review-info" id="reviewInfo"></div>
+                
+                <div class="form-group">
+                    <label>满意度评分 <span class="required">*</span></label>
+                    <div class="rating-stars" id="ratingStars">
+                        <span class="star" data-rating="1">☆</span>
+                        <span class="star" data-rating="2">☆</span>
+                        <span class="star" data-rating="3">☆</span>
+                        <span class="star" data-rating="4">☆</span>
+                        <span class="star" data-rating="5">☆</span>
+                    </div>
+                    <div class="rating-text" id="ratingText">请点击星星评分</div>
+                </div>
+
+                <div class="form-group">
+                    <label>文字反馈</label>
+                    <textarea id="reviewFeedback" placeholder="请输入您的宝贵意见和建议（选填）" rows="4" maxlength="500"></textarea>
+                    <div class="char-count"><span id="feedbackCount">0</span>/500</div>
+                </div>
+
+                <button class="btn btn-primary btn-block" id="submitReview">提交评价</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal" id="reviewSuccessModal">
+        <div class="modal-content confirm-modal-content">
+            <div class="confirm-icon">🎉</div>
+            <h3>评价提交成功！</h3>
+            <p style="color:#666; margin:12px 0 20px; font-size:14px;">感谢您的宝贵意见，我们会持续改进服务质量。</p>
+            <button class="btn btn-primary" id="closeReviewSuccess">我知道了</button>
         </div>
     </div>
 

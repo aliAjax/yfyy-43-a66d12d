@@ -5,7 +5,9 @@ const state = {
     selectedDate: null,
     selectedTimeSlot: null,
     currentWeekOffset: 0,
-    currentAppointment: null
+    currentAppointment: null,
+    currentRating: 0,
+    currentReview: null
 };
 
 const API_BASE = '/api';
@@ -491,6 +493,7 @@ async function submitQuery() {
         }
 
         state.currentAppointment = data;
+        state.currentReview = null;
 
         let materials = [];
         try {
@@ -498,6 +501,17 @@ async function submitQuery() {
             materials = await matRes.json();
         } catch (e) {
             console.error('加载材料清单失败', e);
+        }
+
+        if (data.status === 'completed') {
+            try {
+                const reviewRes = await fetch(`${API_BASE}/appointments/${data.id}/review?phone=${encodeURIComponent(phone)}`);
+                if (reviewRes.ok) {
+                    state.currentReview = await reviewRes.json();
+                }
+            } catch (e) {
+                console.error('加载评价失败', e);
+            }
         }
 
         renderAppointmentDetail(data, materials);
@@ -518,6 +532,7 @@ function renderAppointmentDetail(appointment, materials = []) {
     const statusText = getStatusText(appointment.status);
     const statusClass = getStatusClass(appointment.status);
     const canCancel = appointment.status === 'pending';
+    const canReview = appointment.status === 'completed' && !state.currentReview;
 
     const materialsHtml = materials.length > 0 ? `
         <div class="detail-materials">
@@ -532,6 +547,22 @@ function renderAppointmentDetail(appointment, materials = []) {
             </ul>
         </div>
     ` : '';
+
+    let reviewHtml = '';
+    if (state.currentReview) {
+        const stars = '★'.repeat(state.currentReview.rating) + '☆'.repeat(5 - state.currentReview.rating);
+        reviewHtml = `
+            <div class="detail-review">
+                <div class="detail-review-title">⭐ 我的评价</div>
+                <div class="detail-review-rating">
+                    <span class="review-stars">${stars}</span>
+                    <span class="review-score">${state.currentReview.rating} 分</span>
+                </div>
+                ${state.currentReview.feedback ? `<div class="detail-review-feedback">${escapeHtml(state.currentReview.feedback)}</div>` : ''}
+                <div class="detail-review-time">评价时间：${state.currentReview.created_at ? state.currentReview.created_at.substring(0, 19) : ''}</div>
+            </div>
+        `;
+    }
 
     const detailHtml = `
         <div class="detail-header">
@@ -573,10 +604,11 @@ function renderAppointmentDetail(appointment, materials = []) {
                 <div class="detail-reminder-content" id="detailReminderContent"></div>
                 <div class="detail-reminder-time" id="detailReminderTime"></div>
             </div>
+            ${reviewHtml}
         </div>
         ${canCancel ? '<div class="detail-tip">💡 该预约处于待办理状态，您可以在线取消</div>' : ''}
         ${appointment.status === 'cancelled' ? '<div class="detail-tip detail-tip-muted">该预约已取消，号源已释放</div>' : ''}
-        ${appointment.status === 'completed' ? '<div class="detail-tip detail-tip-muted">该预约已完成</div>' : ''}
+        ${appointment.status === 'completed' && !state.currentReview ? '<div class="detail-tip">⭐ 您已完成办理，点击下方按钮进行满意度评价</div>' : ''}
         ${appointment.status === 'arrived' ? '<div class="detail-tip detail-tip-muted">该预约已签到，请到窗口办理</div>' : ''}
     `;
 
@@ -587,6 +619,13 @@ function renderAppointmentDetail(appointment, materials = []) {
         cancelBtn.style.display = 'block';
     } else {
         cancelBtn.style.display = 'none';
+    }
+
+    const reviewBtn = document.getElementById('reviewBtn');
+    if (canReview) {
+        reviewBtn.style.display = 'block';
+    } else {
+        reviewBtn.style.display = 'none';
     }
 }
 
@@ -615,6 +654,136 @@ function backToQuery() {
     document.getElementById('queryForm').style.display = 'block';
     document.getElementById('queryResult').style.display = 'none';
     state.currentAppointment = null;
+    state.currentReview = null;
+}
+
+function openReviewModal() {
+    if (!state.currentAppointment) return;
+
+    state.currentRating = 0;
+    document.getElementById('reviewInfo').innerHTML = `
+        <p><strong>预约编号：</strong>${state.currentAppointment.id}</p>
+        <p><strong>办理事项：</strong>${state.currentAppointment.item_name || ''}</p>
+        <p><strong>办理日期：</strong>${state.currentAppointment.appointment_date} ${state.currentAppointment.time_slot}</p>
+    `;
+
+    updateRatingDisplay();
+    document.getElementById('reviewFeedback').value = '';
+    document.getElementById('feedbackCount').textContent = '0';
+    document.getElementById('reviewModal').classList.add('show');
+}
+
+function closeReviewModal() {
+    document.getElementById('reviewModal').classList.remove('show');
+}
+
+function updateRatingDisplay() {
+    const stars = document.querySelectorAll('#ratingStars .star');
+    const ratingText = document.getElementById('ratingText');
+
+    const ratingTexts = {
+        1: '非常不满意',
+        2: '不满意',
+        3: '一般',
+        4: '满意',
+        5: '非常满意'
+    };
+
+    stars.forEach((star, index) => {
+        if (index < state.currentRating) {
+            star.textContent = '★';
+            star.classList.add('active');
+        } else {
+            star.textContent = '☆';
+            star.classList.remove('active');
+        }
+    });
+
+    ratingText.textContent = state.currentRating > 0 
+        ? `${ratingTexts[state.currentRating]}（${state.currentRating} 分）`
+        : '请点击星星评分';
+}
+
+function initRatingStars() {
+    const stars = document.querySelectorAll('#ratingStars .star');
+    stars.forEach(star => {
+        star.addEventListener('click', () => {
+            state.currentRating = parseInt(star.dataset.rating);
+            updateRatingDisplay();
+        });
+
+        star.addEventListener('mouseenter', () => {
+            const rating = parseInt(star.dataset.rating);
+            stars.forEach((s, index) => {
+                if (index < rating) {
+                    s.textContent = '★';
+                } else {
+                    s.textContent = '☆';
+                }
+            });
+        });
+
+        star.addEventListener('mouseleave', () => {
+            updateRatingDisplay();
+        });
+    });
+}
+
+async function submitReview() {
+    if (!state.currentAppointment) return;
+
+    if (state.currentRating < 1) {
+        showToast('请选择满意度评分', 'error');
+        return;
+    }
+
+    const feedback = document.getElementById('reviewFeedback').value.trim();
+
+    const submitBtn = document.getElementById('submitReview');
+    submitBtn.disabled = true;
+    submitBtn.textContent = '提交中...';
+
+    try {
+        const res = await fetch(`${API_BASE}/reviews`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                appointment_id: state.currentAppointment.id,
+                phone: state.currentAppointment.phone,
+                rating: state.currentRating,
+                feedback: feedback
+            })
+        });
+
+        const data = await res.json();
+
+        if (!res.ok) {
+            throw new Error(data.error || '提交失败');
+        }
+
+        state.currentReview = {
+            id: data.id,
+            rating: state.currentRating,
+            feedback: feedback,
+            created_at: data.created_at
+        };
+
+        closeReviewModal();
+        showToast('评价提交成功，感谢您的反馈！', 'success');
+
+        if (state.currentAppointment) {
+            renderAppointmentDetail(state.currentAppointment);
+        }
+
+        setTimeout(() => {
+            document.getElementById('reviewSuccessModal').classList.add('show');
+        }, 300);
+    } catch (e) {
+        showToast(e.message, 'error');
+    } finally {
+        submitBtn.disabled = false;
+        submitBtn.textContent = '提交评价';
+    }
 }
 
 function openConfirmCancel() {
@@ -670,6 +839,17 @@ function initQueryEvents() {
     document.getElementById('cancelCancelBtn').addEventListener('click', closeConfirmCancel);
     document.getElementById('confirmCancelBtn').addEventListener('click', confirmCancelAppointment);
 
+    document.getElementById('reviewBtn').addEventListener('click', openReviewModal);
+    document.getElementById('closeReviewModal').addEventListener('click', closeReviewModal);
+    document.getElementById('submitReview').addEventListener('click', submitReview);
+    document.getElementById('closeReviewSuccess').addEventListener('click', () => {
+        document.getElementById('reviewSuccessModal').classList.remove('show');
+    });
+
+    document.getElementById('reviewFeedback').addEventListener('input', (e) => {
+        document.getElementById('feedbackCount').textContent = e.target.value.length;
+    });
+
     document.getElementById('queryModal').addEventListener('click', (e) => {
         if (e.target.id === 'queryModal') {
             closeQueryModal();
@@ -679,6 +859,18 @@ function initQueryEvents() {
     document.getElementById('confirmCancelModal').addEventListener('click', (e) => {
         if (e.target.id === 'confirmCancelModal') {
             closeConfirmCancel();
+        }
+    });
+
+    document.getElementById('reviewModal').addEventListener('click', (e) => {
+        if (e.target.id === 'reviewModal') {
+            closeReviewModal();
+        }
+    });
+
+    document.getElementById('reviewSuccessModal').addEventListener('click', (e) => {
+        if (e.target.id === 'reviewSuccessModal') {
+            document.getElementById('reviewSuccessModal').classList.remove('show');
         }
     });
 
@@ -693,6 +885,8 @@ function initQueryEvents() {
             submitQuery();
         }
     });
+
+    initRatingStars();
 }
 
 function init() {

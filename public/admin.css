@@ -803,3 +803,24 @@ body {
     background: #667eea;
     color: white;
 }
+
+.stat-icon-orange {
+    background: linear-gradient(135deg, #f6ad55 0%, #ed8936 100%);
+}
+
+.review-stars-inline {
+    font-size: 13px;
+    white-space: nowrap;
+}
+
+.review-stars-inline.rating-high {
+    color: #38a169;
+}
+
+.review-stars-inline.rating-medium {
+    color: #ed8936;
+}
+
+.review-stars-inline.rating-low {
+    color: #e53e3e;
+}

@@ -7,6 +7,10 @@ const state = {
     reminderPage: 1,
     reminderTotal: 0,
     reminderPageSize: 20,
+    reviews: [],
+    reviewPage: 1,
+    reviewTotal: 0,
+    reviewPageSize: 20,
     editingItemId: null,
     editingMaterials: [],
     slotModalData: null,
@@ -128,7 +132,8 @@ function switchTab(tab) {
         appointments: '预约管理',
         items: '事项管理',
         holidays: '节假日管理',
-        reminders: '提醒记录'
+        reminders: '提醒记录',
+        reviews: '评价管理'
     };
     document.getElementById('pageTitle').textContent = titles[tab];
 
@@ -142,6 +147,8 @@ function switchTab(tab) {
         loadHolidays();
     } else if (tab === 'reminders') {
         loadReminders();
+    } else if (tab === 'reviews') {
+        loadReviews();
     }
 }
 
@@ -154,6 +161,8 @@ async function loadDashboard() {
         document.getElementById('statPending').textContent = data.pending_today;
         document.getElementById('statCompleted').textContent = data.completed_today;
         document.getElementById('statArrived').textContent = data.arrived_today;
+        document.getElementById('statReview').textContent = data.review_today || 0;
+        document.getElementById('statAvgRating').textContent = data.avg_rating_today || '0.0';
 
         loadTodayAppointments();
     } catch (e) {
@@ -887,6 +896,136 @@ function resetReminderFilters() {
     searchReminders();
 }
 
+async function loadReviews() {
+    await loadReviewItemSelect();
+    await searchReviews();
+}
+
+async function loadReviewItemSelect() {
+    try {
+        if (state.items.length === 0) {
+            const res = await fetch(`${API_BASE}/items`);
+            state.items = await res.json();
+        }
+
+        const select = document.getElementById('filterReviewItem');
+        select.innerHTML = '<option value="">全部事项</option>' +
+            state.items.map(item => `<option value="${item.id}">${item.name}</option>`).join('');
+    } catch (e) {
+        console.error('加载事项失败', e);
+    }
+}
+
+async function searchReviews() {
+    const date = document.getElementById('filterReviewDate').value;
+    const itemId = document.getElementById('filterReviewItem').value;
+    const rating = document.getElementById('filterReviewRating').value;
+    const phone = document.getElementById('filterReviewPhone').value.trim();
+
+    let url = `${API_BASE}/reviews?page=${state.reviewPage}&page_size=${state.reviewPageSize}`;
+    if (date) url += `&date=${date}`;
+    if (itemId) url += `&item_id=${itemId}`;
+    if (rating) url += `&rating=${rating}`;
+    if (phone) url += `&phone=${encodeURIComponent(phone)}`;
+
+    try {
+        const res = await fetch(url);
+        const data = await res.json();
+        state.reviews = data.list;
+        state.reviewTotal = data.total;
+        state.reviewPage = data.page;
+        renderReviews();
+        renderReviewPagination(data.total_pages);
+    } catch (e) {
+        document.getElementById('reviewList').innerHTML = '<tr><td colspan="9" class="loading">加载失败</td></tr>';
+    }
+}
+
+function getRatingStars(rating) {
+    return '★'.repeat(rating) + '☆'.repeat(5 - rating);
+}
+
+function getRatingClass(rating) {
+    if (rating >= 4) return 'rating-high';
+    if (rating >= 3) return 'rating-medium';
+    return 'rating-low';
+}
+
+function renderReviews() {
+    const tbody = document.getElementById('reviewList');
+
+    if (state.reviews.length === 0) {
+        tbody.innerHTML = `
+            <tr>
+                <td colspan="9" class="empty-state">
+                    <div class="empty-icon">⭐</div>
+                    <p>暂无评价记录</p>
+                </td>
+            </tr>
+        `;
+        return;
+    }
+
+    tbody.innerHTML = state.reviews.map(review => `
+        <tr>
+            <td>${review.id}</td>
+            <td>${review.appointment_id}</td>
+            <td>${review.item_name || '-'}</td>
+            <td>${review.user_name}</td>
+            <td>${review.phone}</td>
+            <td><span class="review-stars-inline ${getRatingClass(review.rating)}">${getRatingStars(review.rating)} ${review.rating}分</span></td>
+            <td style="max-width:250px;white-space:normal;">${escapeHtml(review.feedback) || '<span style="color:#999;">无</span>'}</td>
+            <td>${review.appointment_date || '-'}</td>
+            <td>${review.created_at ? review.created_at.substring(0, 19) : '-'}</td>
+        </tr>
+    `).join('');
+}
+
+function renderReviewPagination(totalPages) {
+    const container = document.getElementById('reviewPagination');
+
+    if (totalPages <= 1) {
+        container.innerHTML = '';
+        return;
+    }
+
+    let html = '<div class="pagination-info">共 ' + state.reviewTotal + ' 条记录</div>';
+    html += '<div class="pagination-buttons">';
+
+    if (state.reviewPage > 1) {
+        html += `<button class="btn btn-sm btn-secondary" onclick="goToReviewPage(${state.reviewPage - 1})">上一页</button>`;
+    }
+
+    const startPage = Math.max(1, state.reviewPage - 2);
+    const endPage = Math.min(totalPages, state.reviewPage + 2);
+
+    for (let i = startPage; i <= endPage; i++) {
+        const active = i === state.reviewPage ? 'active' : '';
+        html += `<button class="btn btn-sm ${active ? 'btn-primary' : 'btn-secondary'}" onclick="goToReviewPage(${i})">${i}</button>`;
+    }
+
+    if (state.reviewPage < totalPages) {
+        html += `<button class="btn btn-sm btn-secondary" onclick="goToReviewPage(${state.reviewPage + 1})">下一页</button>`;
+    }
+
+    html += '</div>';
+    container.innerHTML = html;
+}
+
+function goToReviewPage(page) {
+    state.reviewPage = page;
+    searchReviews();
+}
+
+function resetReviewFilters() {
+    document.getElementById('filterReviewDate').value = '';
+    document.getElementById('filterReviewItem').value = '';
+    document.getElementById('filterReviewRating').value = '';
+    document.getElementById('filterReviewPhone').value = '';
+    state.reviewPage = 1;
+    searchReviews();
+}
+
 function openSlotModal(itemId, itemName) {
     const today = formatDate(new Date());
     state.slotModalData = { itemId, itemName, date: today };
@@ -1010,6 +1149,12 @@ function initModals() {
     });
     document.getElementById('btnResetReminder').addEventListener('click', resetReminderFilters);
 
+    document.getElementById('btnSearchReview').addEventListener('click', () => {
+        state.reviewPage = 1;
+        searchReviews();
+    });
+    document.getElementById('btnResetReview').addEventListener('click', resetReviewFilters);
+
     document.querySelectorAll('.modal').forEach(modal => {
         modal.addEventListener('click', (e) => {
             if (e.target === modal) {
@@ -1044,5 +1189,6 @@ window.addMaterial = addMaterial;
 window.removeMaterial = removeMaterial;
 window.moveMaterial = moveMaterial;
 window.goToReminderPage = goToReminderPage;
+window.goToReviewPage = goToReviewPage;
 
 document.addEventListener('DOMContentLoaded', init);

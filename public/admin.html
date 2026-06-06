@@ -34,6 +34,10 @@
                     <span class="nav-icon">📱</span>
                     <span>提醒记录</span>
                 </div>
+                <div class="nav-item" data-tab="reviews">
+                    <span class="nav-icon">⭐</span>
+                    <span>评价管理</span>
+                </div>
             </nav>
             <div class="sidebar-footer">
                 <a href="/" class="link-btn">← 返回首页</a>
@@ -77,6 +81,20 @@
                             <div class="stat-info">
                                 <div class="stat-value" id="statArrived">0</div>
                                 <div class="stat-label">已到场</div>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon stat-icon-orange">⭐</div>
+                            <div class="stat-info">
+                                <div class="stat-value" id="statReview">0</div>
+                                <div class="stat-label">今日已评价</div>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon stat-icon-yellow">📊</div>
+                            <div class="stat-info">
+                                <div class="stat-value" id="statAvgRating">0.0</div>
+                                <div class="stat-label">今日平均评分</div>
                             </div>
                         </div>
                     </div>
@@ -272,6 +290,67 @@
                     </div>
 
                     <div class="pagination" id="reminderPagination"></div>
+                </div>
+
+                <div class="tab-content" id="tab-reviews">
+                    <div class="page-header">
+                        <h3>评价管理</h3>
+                    </div>
+
+                    <div class="filter-bar">
+                        <div class="filter-item">
+                            <label>评价日期</label>
+                            <input type="date" id="filterReviewDate">
+                        </div>
+                        <div class="filter-item">
+                            <label>事项</label>
+                            <select id="filterReviewItem">
+                                <option value="">全部事项</option>
+                            </select>
+                        </div>
+                        <div class="filter-item">
+                            <label>评分</label>
+                            <select id="filterReviewRating">
+                                <option value="">全部评分</option>
+                                <option value="5">5分</option>
+                                <option value="4">4分</option>
+                                <option value="3">3分</option>
+                                <option value="2">2分</option>
+                                <option value="1">1分</option>
+                            </select>
+                        </div>
+                        <div class="filter-item">
+                            <label>手机号</label>
+                            <input type="text" id="filterReviewPhone" placeholder="搜索手机号">
+                        </div>
+                        <div class="filter-item filter-actions">
+                            <button class="btn btn-primary" id="btnSearchReview">查询</button>
+                            <button class="btn btn-secondary" id="btnResetReview">重置</button>
+                        </div>
+                    </div>
+
+                    <div class="table-container">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>ID</th>
+                                    <th>预约编号</th>
+                                    <th>事项</th>
+                                    <th>姓名</th>
+                                    <th>手机号</th>
+                                    <th>评分</th>
+                                    <th>反馈内容</th>
+                                    <th>预约日期</th>
+                                    <th>评价时间</th>
+                                </tr>
+                            </thead>
+                            <tbody id="reviewList">
+                                <tr><td colspan="9" class="loading">加载中...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class="pagination" id="reviewPagination"></div>
                 </div>
             </div>
         </main>

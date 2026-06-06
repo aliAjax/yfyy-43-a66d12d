@@ -70,12 +70,29 @@ db.exec(`
     FOREIGN KEY (appointment_id) REFERENCES appointments(id)
   );
 
+  CREATE TABLE IF NOT EXISTS appointment_reviews (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    appointment_id INTEGER NOT NULL,
+    item_id INTEGER NOT NULL,
+    user_name TEXT NOT NULL,
+    phone TEXT NOT NULL,
+    rating INTEGER NOT NULL,
+    feedback TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (appointment_id) REFERENCES appointments(id),
+    FOREIGN KEY (item_id) REFERENCES items(id),
+    UNIQUE(appointment_id)
+  );
+
   CREATE INDEX IF NOT EXISTS idx_materials_item ON item_materials(item_id);
   CREATE INDEX IF NOT EXISTS idx_appointments_phone_item ON appointments(phone, item_id);
   CREATE INDEX IF NOT EXISTS idx_appointments_date ON appointments(appointment_date);
   CREATE INDEX IF NOT EXISTS idx_reminders_phone ON appointment_reminders(phone);
   CREATE INDEX IF NOT EXISTS idx_reminders_appointment ON appointment_reminders(appointment_id);
   CREATE INDEX IF NOT EXISTS idx_reminders_created ON appointment_reminders(created_at);
+  CREATE INDEX IF NOT EXISTS idx_reviews_appointment ON appointment_reviews(appointment_id);
+  CREATE INDEX IF NOT EXISTS idx_reviews_item ON appointment_reviews(item_id);
+  CREATE INDEX IF NOT EXISTS idx_reviews_created ON appointment_reviews(created_at);
 `);
 
 const columns = db.prepare("PRAGMA table_info(items)").all();
@@ -863,13 +880,163 @@ app.get('/api/stats', (req, res) => {
   const arrivedToday = db.prepare('SELECT COUNT(*) as count FROM appointments WHERE appointment_date = ? AND status = ?').get(today, 'arrived').count;
   const totalItems = db.prepare('SELECT COUNT(*) as count FROM items').get().count;
 
+  const reviewToday = db.prepare('SELECT COUNT(*) as count FROM appointment_reviews WHERE DATE(created_at) = ?').get(today).count;
+  const avgRatingRow = db.prepare('SELECT AVG(rating) as avg_rating FROM appointment_reviews WHERE DATE(created_at) = ?').get(today);
+  const avgRatingToday = avgRatingRow.avg_rating ? parseFloat(avgRatingRow.avg_rating.toFixed(1)) : 0;
+
   res.json({
     today,
     total_today: totalToday,
     pending_today: pendingToday,
     completed_today: completedToday,
     arrived_today: arrivedToday,
-    total_items: totalItems
+    total_items: totalItems,
+    review_today: reviewToday,
+    avg_rating_today: avgRatingToday
+  });
+});
+
+app.post('/api/reviews', (req, res) => {
+  const { appointment_id, phone, rating, feedback } = req.body;
+
+  if (!appointment_id || !phone || !rating) {
+    return res.status(400).json({ error: '请填写完整信息' });
+  }
+
+  const ratingNum = parseInt(rating);
+  if (isNaN(ratingNum) || ratingNum < 1 || ratingNum > 5) {
+    return res.status(400).json({ error: '评分必须在1-5之间' });
+  }
+
+  const phoneRegex = /^1[3-9]\d{9}$/;
+  if (!phoneRegex.test(phone)) {
+    return res.status(400).json({ error: '请输入正确的手机号' });
+  }
+
+  const appointment = db.prepare(`
+    SELECT a.*, i.name as item_name 
+    FROM appointments a 
+    LEFT JOIN items i ON a.item_id = i.id 
+    WHERE a.id = ?
+  `).get(appointment_id);
+
+  if (!appointment) {
+    return res.status(404).json({ error: '预约记录不存在' });
+  }
+
+  if (appointment.phone !== phone) {
+    return res.status(403).json({ error: '手机号不匹配' });
+  }
+
+  if (appointment.status !== 'completed') {
+    return res.status(400).json({ error: '只有已办理的预约才能评价' });
+  }
+
+  const existingReview = db.prepare('SELECT id FROM appointment_reviews WHERE appointment_id = ?').get(appointment_id);
+  if (existingReview) {
+    return res.status(400).json({ error: '该预约已评价，不能重复评价' });
+  }
+
+  try {
+    const result = db.prepare(`
+      INSERT INTO appointment_reviews (appointment_id, item_id, user_name, phone, rating, feedback)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(
+      appointment_id,
+      appointment.item_id,
+      appointment.user_name,
+      phone,
+      ratingNum,
+      feedback || ''
+    );
+
+    res.json({
+      id: result.lastInsertRowid,
+      appointment_id,
+      rating: ratingNum,
+      feedback: feedback || '',
+      created_at: new Date().toISOString()
+    });
+  } catch (e) {
+    res.status(500).json({ error: '提交评价失败' });
+  }
+});
+
+app.get('/api/appointments/:id/review', (req, res) => {
+  const { id } = req.params;
+  const { phone } = req.query;
+
+  if (!phone) {
+    return res.status(400).json({ error: '请提供手机号' });
+  }
+
+  const review = db.prepare(`
+    SELECT r.*, i.name as item_name
+    FROM appointment_reviews r
+    LEFT JOIN items i ON r.item_id = i.id
+    WHERE r.appointment_id = ? AND r.phone = ?
+  `).get(id, phone);
+
+  if (!review) {
+    return res.status(404).json({ error: '未找到评价记录' });
+  }
+
+  res.json(review);
+});
+
+app.get('/api/reviews', (req, res) => {
+  const { date, item_id, rating, phone, page = 1, page_size = 20 } = req.query;
+
+  let countSql = `SELECT COUNT(*) as total FROM appointment_reviews WHERE 1=1`;
+  let sql = `
+    SELECT r.*, i.name as item_name, a.appointment_date, a.time_slot
+    FROM appointment_reviews r
+    LEFT JOIN items i ON r.item_id = i.id
+    LEFT JOIN appointments a ON r.appointment_id = a.id
+    WHERE 1=1
+  `;
+  const params = [];
+  const countParams = [];
+
+  if (date) {
+    sql += ' AND DATE(r.created_at) = ?';
+    countSql += ' AND DATE(created_at) = ?';
+    params.push(date);
+    countParams.push(date);
+  }
+  if (item_id) {
+    sql += ' AND r.item_id = ?';
+    countSql += ' AND item_id = ?';
+    params.push(item_id);
+    countParams.push(item_id);
+  }
+  if (rating) {
+    sql += ' AND r.rating = ?';
+    countSql += ' AND rating = ?';
+    params.push(parseInt(rating));
+    countParams.push(parseInt(rating));
+  }
+  if (phone) {
+    sql += ' AND r.phone = ?';
+    countSql += ' AND phone = ?';
+    params.push(phone);
+    countParams.push(phone);
+  }
+
+  sql += ' ORDER BY r.created_at DESC, r.id DESC LIMIT ? OFFSET ?';
+  const limit = parseInt(page_size) || 20;
+  const offset = (parseInt(page) - 1) * limit;
+  params.push(limit, offset);
+
+  const reviews = db.prepare(sql).all(...params);
+  const total = db.prepare(countSql).get(...countParams).total;
+
+  res.json({
+    list: reviews,
+    total,
+    page: parseInt(page),
+    page_size: limit,
+    total_pages: Math.ceil(total / limit)
   });
 });
 
