@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>后台管理 - 街道办预约系统</title>
+    <link rel="stylesheet" href="admin.css">
+</head>
+<body>
+    <div class="admin-layout">
+        <aside class="sidebar">
+            <div class="logo">
+                <h2>预约管理系统</h2>
+                <p class="logo-sub">街道办事处</p>
+            </div>
+            <nav class="nav-menu">
+                <div class="nav-item active" data-tab="dashboard">
+                    <span class="nav-icon">📊</span>
+                    <span>数据概览</span>
+                </div>
+                <div class="nav-item" data-tab="appointments">
+                    <span class="nav-icon">📅</span>
+                    <span>预约管理</span>
+                </div>
+                <div class="nav-item" data-tab="items">
+                    <span class="nav-icon">📋</span>
+                    <span>事项管理</span>
+                </div>
+                <div class="nav-item" data-tab="holidays">
+                    <span class="nav-icon">🎉</span>
+                    <span>节假日管理</span>
+                </div>
+            </nav>
+            <div class="sidebar-footer">
+                <a href="/" class="link-btn">← 返回首页</a>
+            </div>
+        </aside>
+
+        <main class="main-content">
+            <header class="topbar">
+                <h1 id="pageTitle">数据概览</h1>
+                <div class="topbar-actions">
+                    <span class="today-date" id="todayDate"></span>
+                </div>
+            </header>
+
+            <div class="content-area">
+                <div class="tab-content active" id="tab-dashboard">
+                    <div class="stats-grid">
+                        <div class="stat-card">
+                            <div class="stat-icon stat-icon-blue">📋</div>
+                            <div class="stat-info">
+                                <div class="stat-value" id="statTotal">0</div>
+                                <div class="stat-label">今日预约总数</div>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon stat-icon-yellow">⏳</div>
+                            <div class="stat-info">
+                                <div class="stat-value" id="statPending">0</div>
+                                <div class="stat-label">待办理</div>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon stat-icon-green">✅</div>
+                            <div class="stat-info">
+                                <div class="stat-value" id="statCompleted">0</div>
+                                <div class="stat-label">已办理</div>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon stat-icon-purple">🚶</div>
+                            <div class="stat-info">
+                                <div class="stat-value" id="statArrived">0</div>
+                                <div class="stat-label">已到场</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="dashboard-section">
+                        <h3>今日预约列表</h3>
+                        <div class="table-container">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>时段</th>
+                                        <th>事项</th>
+                                        <th>姓名</th>
+                                        <th>手机号</th>
+                                        <th>状态</th>
+                                        <th>操作</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="todayAppointments">
+                                    <tr><td colspan="6" class="loading">加载中...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="tab-content" id="tab-appointments">
+                    <div class="filter-bar">
+                        <div class="filter-item">
+                            <label>日期</label>
+                            <input type="date" id="filterDate">
+                        </div>
+                        <div class="filter-item">
+                            <label>事项</label>
+                            <select id="filterItem">
+                                <option value="">全部事项</option>
+                            </select>
+                        </div>
+                        <div class="filter-item">
+                            <label>状态</label>
+                            <select id="filterStatus">
+                                <option value="">全部状态</option>
+                                <option value="pending">待办理</option>
+                                <option value="arrived">已到场</option>
+                                <option value="completed">已办理</option>
+                                <option value="cancelled">已取消</option>
+                            </select>
+                        </div>
+                        <div class="filter-item">
+                            <label>手机号</label>
+                            <input type="text" id="filterPhone" placeholder="搜索手机号">
+                        </div>
+                        <div class="filter-item filter-actions">
+                            <button class="btn btn-primary" id="btnSearch">查询</button>
+                            <button class="btn btn-secondary" id="btnReset">重置</button>
+                        </div>
+                    </div>
+
+                    <div class="table-container">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>预约日期</th>
+                                    <th>时段</th>
+                                    <th>事项</th>
+                                    <th>姓名</th>
+                                    <th>手机号</th>
+                                    <th>状态</th>
+                                    <th>创建时间</th>
+                                    <th>操作</th>
+                                </tr>
+                            </thead>
+                            <tbody id="appointmentList">
+                                <tr><td colspan="8" class="loading">加载中...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="tab-content" id="tab-items">
+                    <div class="page-header">
+                        <h3>可预约事项列表</h3>
+                        <button class="btn btn-primary" id="btnAddItem">+ 新增事项</button>
+                    </div>
+
+                    <div class="table-container">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>序号</th>
+                                    <th>事项名称</th>
+                                    <th>事项描述</th>
+                                    <th>创建时间</th>
+                                    <th>操作</th>
+                                </tr>
+                            </thead>
+                            <tbody id="itemList">
+                                <tr><td colspan="5" class="loading">加载中...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="tab-content" id="tab-holidays">
+                    <div class="page-header">
+                        <h3>节假日设置</h3>
+                        <button class="btn btn-primary" id="btnAddHoliday">+ 新增节假日</button>
+                    </div>
+
+                    <div class="holiday-tips">
+                        <p>💡 设置节假日后，该日期将不可预约。周末自动不可预约，无需额外设置。</p>
+                    </div>
+
+                    <div class="table-container">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>序号</th>
+                                    <th>日期</th>
+                                    <th>节假日名称</th>
+                                    <th>操作</th>
+                                </tr>
+                            </thead>
+                            <tbody id="holidayList">
+                                <tr><td colspan="4" class="loading">加载中...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <div class="modal" id="itemModal">
+        <div class="modal-content">
+            <h3 id="itemModalTitle">新增事项</h3>
+            <div class="form-group">
+                <label>事项名称 <span class="required">*</span></label>
+                <input type="text" id="itemName" placeholder="请输入事项名称" maxlength="50">
+            </div>
+            <div class="form-group">
+                <label>事项描述</label>
+                <textarea id="itemDesc" placeholder="请输入事项描述（选填）" rows="3" maxlength="200"></textarea>
+            </div>
+            <div class="form-group">
+                <label>每日默认号源数</label>
+                <input type="number" id="itemMaxCount" value="20" min="1" max="100">
+                <small class="form-tip">可在预约管理中单独调整某日的号源数量</small>
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" id="btnCancelItem">取消</button>
+                <button class="btn btn-primary" id="btnSaveItem">保存</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal" id="holidayModal">
+        <div class="modal-content">
+            <h3>新增节假日</h3>
+            <div class="form-group">
+                <label>日期 <span class="required">*</span></label>
+                <input type="date" id="holidayDate">
+            </div>
+            <div class="form-group">
+                <label>节假日名称</label>
+                <input type="text" id="holidayName" placeholder="如：国庆节、春节等" maxlength="20">
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" id="btnCancelHoliday">取消</button>
+                <button class="btn btn-primary" id="btnSaveHoliday">保存</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal" id="slotModal">
+        <div class="modal-content">
+            <h3>设置号源数量</h3>
+            <div class="slot-info" id="slotInfo"></div>
+            <div class="form-group">
+                <label>号源数量 <span class="required">*</span></label>
+                <input type="number" id="slotMaxCount" min="1" max="200">
+                <small class="form-tip">设置当日该事项可预约的最大数量</small>
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" id="btnCancelSlot">取消</button>
+                <button class="btn btn-primary" id="btnSaveSlot">保存</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal" id="confirmModal">
+        <div class="modal-content">
+            <h3 id="confirmTitle">确认操作</h3>
+            <p id="confirmMessage"></p>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" id="btnConfirmCancel">取消</button>
+                <button class="btn btn-danger" id="btnConfirmOk">确认</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="admin.js"></script>
+</body>
+</html>

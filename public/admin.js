@@ -1,0 +1,556 @@
+const state = {
+    currentTab: 'dashboard',
+    items: [],
+    appointments: [],
+    holidays: [],
+    editingItemId: null,
+    slotModalData: null,
+    confirmCallback: null
+};
+
+const API_BASE = '/api';
+
+function showToast(message, type = 'info') {
+    const toast = document.createElement('div');
+    toast.className = `toast ${type}`;
+    toast.textContent = message;
+    document.body.appendChild(toast);
+    setTimeout(() => {
+        toast.remove();
+    }, 3000);
+}
+
+function showConfirm(title, message, callback) {
+    document.getElementById('confirmTitle').textContent = title;
+    document.getElementById('confirmMessage').textContent = message;
+    state.confirmCallback = callback;
+    document.getElementById('confirmModal').classList.add('show');
+}
+
+function formatDate(date) {
+    const year = date.getFullYear();
+    const month = (date.getMonth() + 1).toString().padStart(2, '0');
+    const day = date.getDate().toString().padStart(2, '0');
+    return `${year}-${month}-${day}`;
+}
+
+function getStatusText(status) {
+    const map = {
+        pending: '待办理',
+        arrived: '已到场',
+        completed: '已办理',
+        cancelled: '已取消'
+    };
+    return map[status] || status;
+}
+
+function getStatusClass(status) {
+    return `status-${status}`;
+}
+
+function initNavigation() {
+    document.querySelectorAll('.nav-item').forEach(item => {
+        item.addEventListener('click', () => {
+            const tab = item.dataset.tab;
+            switchTab(tab);
+        });
+    });
+}
+
+function switchTab(tab) {
+    state.currentTab = tab;
+
+    document.querySelectorAll('.nav-item').forEach(item => {
+        item.classList.toggle('active', item.dataset.tab === tab);
+    });
+
+    document.querySelectorAll('.tab-content').forEach(content => {
+        content.classList.remove('active');
+    });
+    document.getElementById(`tab-${tab}`).classList.add('active');
+
+    const titles = {
+        dashboard: '数据概览',
+        appointments: '预约管理',
+        items: '事项管理',
+        holidays: '节假日管理'
+    };
+    document.getElementById('pageTitle').textContent = titles[tab];
+
+    if (tab === 'dashboard') {
+        loadDashboard();
+    } else if (tab === 'appointments') {
+        loadAppointments();
+    } else if (tab === 'items') {
+        loadItems();
+    } else if (tab === 'holidays') {
+        loadHolidays();
+    }
+}
+
+async function loadDashboard() {
+    try {
+        const res = await fetch(`${API_BASE}/stats`);
+        const data = await res.json();
+
+        document.getElementById('statTotal').textContent = data.total_today;
+        document.getElementById('statPending').textContent = data.pending_today;
+        document.getElementById('statCompleted').textContent = data.completed_today;
+        document.getElementById('statArrived').textContent = data.arrived_today;
+
+        loadTodayAppointments();
+    } catch (e) {
+        showToast('加载数据失败', 'error');
+    }
+}
+
+async function loadTodayAppointments() {
+    const today = formatDate(new Date());
+    try {
+        const res = await fetch(`${API_BASE}/appointments?date=${today}`);
+        const appointments = await res.json();
+        renderTodayAppointments(appointments);
+    } catch (e) {
+        document.getElementById('todayAppointments').innerHTML = '<tr><td colspan="6" class="loading">加载失败</td></tr>';
+    }
+}
+
+function renderTodayAppointments(appointments) {
+    const tbody = document.getElementById('todayAppointments');
+
+    if (appointments.length === 0) {
+        tbody.innerHTML = `
+            <tr>
+                <td colspan="6" class="empty-state">
+                    <div class="empty-icon">📅</div>
+                    <p>今日暂无预约</p>
+                </td>
+            </tr>
+        `;
+        return;
+    }
+
+    tbody.innerHTML = appointments.map(apt => `
+        <tr>
+            <td>${apt.time_slot}</td>
+            <td>${apt.item_name}</td>
+            <td>${apt.user_name}</td>
+            <td>${apt.phone}</td>
+            <td><span class="status-badge ${getStatusClass(apt.status)}">${getStatusText(apt.status)}</span></td>
+            <td>
+                <div class="action-buttons">
+                    ${apt.status === 'pending' ? `<button class="btn btn-sm btn-primary" onclick="markArrived(${apt.id})">已到场</button>` : ''}
+                    ${apt.status === 'arrived' ? `<button class="btn btn-sm btn-primary" onclick="markCompleted(${apt.id})">已办理</button>` : ''}
+                    ${apt.status !== 'cancelled' && apt.status !== 'completed' ? `<button class="btn btn-sm btn-secondary" onclick="markCancelled(${apt.id})">取消</button>` : ''}
+                </div>
+            </td>
+        </tr>
+    `).join('');
+}
+
+async function loadAppointments() {
+    await loadItemSelect();
+    await searchAppointments();
+}
+
+async function loadItemSelect() {
+    try {
+        const res = await fetch(`${API_BASE}/items`);
+        state.items = await res.json();
+
+        const select = document.getElementById('filterItem');
+        select.innerHTML = '<option value="">全部事项</option>' +
+            state.items.map(item => `<option value="${item.id}">${item.name}</option>`).join('');
+    } catch (e) {
+        console.error('加载事项失败', e);
+    }
+}
+
+async function searchAppointments() {
+    const date = document.getElementById('filterDate').value;
+    const itemId = document.getElementById('filterItem').value;
+    const status = document.getElementById('filterStatus').value;
+    const phone = document.getElementById('filterPhone').value.trim();
+
+    let url = `${API_BASE}/appointments?`;
+    const params = [];
+    if (date) params.push(`date=${date}`);
+    if (itemId) params.push(`item_id=${itemId}`);
+    if (status) params.push(`status=${status}`);
+    if (phone) params.push(`phone=${phone}`);
+    url += params.join('&');
+
+    try {
+        const res = await fetch(url);
+        state.appointments = await res.json();
+        renderAppointments(state.appointments);
+    } catch (e) {
+        document.getElementById('appointmentList').innerHTML = '<tr><td colspan="8" class="loading">加载失败</td></tr>';
+    }
+}
+
+function renderAppointments(appointments) {
+    const tbody = document.getElementById('appointmentList');
+
+    if (appointments.length === 0) {
+        tbody.innerHTML = `
+            <tr>
+                <td colspan="8" class="empty-state">
+                    <div class="empty-icon">🔍</div>
+                    <p>暂无符合条件的预约记录</p>
+                </td>
+            </tr>
+        `;
+        return;
+    }
+
+    tbody.innerHTML = appointments.map(apt => `
+        <tr>
+            <td>${apt.appointment_date}</td>
+            <td>${apt.time_slot}</td>
+            <td>${apt.item_name}</td>
+            <td>${apt.user_name}</td>
+            <td>${apt.phone}</td>
+            <td><span class="status-badge ${getStatusClass(apt.status)}">${getStatusText(apt.status)}</span></td>
+            <td>${apt.created_at ? apt.created_at.substring(0, 16) : '-'}</td>
+            <td>
+                <div class="action-buttons">
+                    ${apt.status === 'pending' ? `<button class="btn btn-sm btn-primary" onclick="markArrived(${apt.id})">已到场</button>` : ''}
+                    ${apt.status === 'arrived' ? `<button class="btn btn-sm btn-primary" onclick="markCompleted(${apt.id})">已办理</button>` : ''}
+                    ${apt.status === 'pending' || apt.status === 'arrived' ? `<button class="btn btn-sm btn-secondary" onclick="markCancelled(${apt.id})">取消</button>` : ''}
+                    ${apt.status === 'cancelled' ? `<button class="btn btn-sm btn-secondary" onclick="markPending(${apt.id})">恢复</button>` : ''}
+                </div>
+            </td>
+        </tr>
+    `).join('');
+}
+
+async function updateStatus(id, status) {
+    try {
+        const res = await fetch(`${API_BASE}/appointments/${id}/status`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ status })
+        });
+
+        const data = await res.json();
+        if (!res.ok) {
+            throw new Error(data.error || '操作失败');
+        }
+
+        showToast('操作成功', 'success');
+        
+        if (state.currentTab === 'dashboard') {
+            loadDashboard();
+        } else if (state.currentTab === 'appointments') {
+            searchAppointments();
+        }
+    } catch (e) {
+        showToast(e.message, 'error');
+    }
+}
+
+function markArrived(id) {
+    showConfirm('确认到场', '确定将此预约标记为已到场？', () => {
+        updateStatus(id, 'arrived');
+    });
+}
+
+function markCompleted(id) {
+    showConfirm('确认办理完成', '确定将此预约标记为已办理？', () => {
+        updateStatus(id, 'completed');
+    });
+}
+
+function markCancelled(id) {
+    showConfirm('确认取消', '确定取消此预约？取消后号源将释放。', () => {
+        updateStatus(id, 'cancelled');
+    });
+}
+
+function markPending(id) {
+    showConfirm('确认恢复', '确定恢复此预约？', () => {
+        updateStatus(id, 'pending');
+    });
+}
+
+async function loadItems() {
+    try {
+        const res = await fetch(`${API_BASE}/items`);
+        state.items = await res.json();
+        renderItems();
+    } catch (e) {
+        document.getElementById('itemList').innerHTML = '<tr><td colspan="5" class="loading">加载失败</td></tr>';
+    }
+}
+
+function renderItems() {
+    const tbody = document.getElementById('itemList');
+
+    if (state.items.length === 0) {
+        tbody.innerHTML = `
+            <tr>
+                <td colspan="5" class="empty-state">
+                    <div class="empty-icon">📋</div>
+                    <p>暂无事项，请点击右上角新增</p>
+                </td>
+            </tr>
+        `;
+        return;
+    }
+
+    tbody.innerHTML = state.items.map((item, index) => `
+        <tr>
+            <td>${index + 1}</td>
+            <td><strong>${item.name}</strong></td>
+            <td>${item.description || '-'}</td>
+            <td>${item.created_at ? item.created_at.substring(0, 10) : '-'}</td>
+            <td>
+                <div class="action-buttons">
+                    <button class="btn btn-link" onclick="editItem(${item.id})">编辑</button>
+                    <button class="btn btn-link danger" onclick="deleteItem(${item.id})">删除</button>
+                </div>
+            </td>
+        </tr>
+    `).join('');
+}
+
+function openAddItemModal() {
+    state.editingItemId = null;
+    document.getElementById('itemModalTitle').textContent = '新增事项';
+    document.getElementById('itemName').value = '';
+    document.getElementById('itemDesc').value = '';
+    document.getElementById('itemMaxCount').value = 20;
+    document.getElementById('itemModal').classList.add('show');
+}
+
+function editItem(id) {
+    const item = state.items.find(i => i.id === id);
+    if (!item) return;
+
+    state.editingItemId = id;
+    document.getElementById('itemModalTitle').textContent = '编辑事项';
+    document.getElementById('itemName').value = item.name;
+    document.getElementById('itemDesc').value = item.description || '';
+    document.getElementById('itemMaxCount').value = 20;
+    document.getElementById('itemModal').classList.add('show');
+}
+
+async function saveItem() {
+    const name = document.getElementById('itemName').value.trim();
+    const description = document.getElementById('itemDesc').value.trim();
+
+    if (!name) {
+        showToast('请输入事项名称', 'error');
+        return;
+    }
+
+    try {
+        let res;
+        if (state.editingItemId) {
+            res = await fetch(`${API_BASE}/items/${state.editingItemId}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name, description })
+            });
+        } else {
+            res = await fetch(`${API_BASE}/items`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name, description })
+            });
+        }
+
+        const data = await res.json();
+        if (!res.ok) {
+            throw new Error(data.error || '保存失败');
+        }
+
+        showToast('保存成功', 'success');
+        document.getElementById('itemModal').classList.remove('show');
+        loadItems();
+    } catch (e) {
+        showToast(e.message, 'error');
+    }
+}
+
+function deleteItem(id) {
+    const item = state.items.find(i => i.id === id);
+    showConfirm('确认删除', `确定删除事项"${item.name}"吗？相关预约记录也将被删除。`, async () => {
+        try {
+            const res = await fetch(`${API_BASE}/items/${id}`, {
+                method: 'DELETE'
+            });
+
+            if (!res.ok) {
+                throw new Error('删除失败');
+            }
+
+            showToast('删除成功', 'success');
+            loadItems();
+        } catch (e) {
+            showToast(e.message, 'error');
+        }
+    });
+}
+
+async function loadHolidays() {
+    try {
+        const res = await fetch(`${API_BASE}/holidays`);
+        state.holidays = await res.json();
+        renderHolidays();
+    } catch (e) {
+        document.getElementById('holidayList').innerHTML = '<tr><td colspan="4" class="loading">加载失败</td></tr>';
+    }
+}
+
+function renderHolidays() {
+    const tbody = document.getElementById('holidayList');
+
+    if (state.holidays.length === 0) {
+        tbody.innerHTML = `
+            <tr>
+                <td colspan="4" class="empty-state">
+                    <div class="empty-icon">🎉</div>
+                    <p>暂无节假日设置</p>
+                </td>
+            </tr>
+        `;
+        return;
+    }
+
+    tbody.innerHTML = state.holidays.map((holiday, index) => `
+        <tr>
+            <td>${index + 1}</td>
+            <td>${holiday.date}</td>
+            <td>${holiday.name || '-'}</td>
+            <td>
+                <button class="btn btn-link danger" onclick="deleteHoliday(${holiday.id})">删除</button>
+            </td>
+        </tr>
+    `).join('');
+}
+
+function openAddHolidayModal() {
+    document.getElementById('holidayDate').value = '';
+    document.getElementById('holidayName').value = '';
+    document.getElementById('holidayModal').classList.add('show');
+}
+
+async function saveHoliday() {
+    const date = document.getElementById('holidayDate').value;
+    const name = document.getElementById('holidayName').value.trim();
+
+    if (!date) {
+        showToast('请选择日期', 'error');
+        return;
+    }
+
+    try {
+        const res = await fetch(`${API_BASE}/holidays`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ date, name })
+        });
+
+        const data = await res.json();
+        if (!res.ok) {
+            throw new Error(data.error || '保存失败');
+        }
+
+        showToast('保存成功', 'success');
+        document.getElementById('holidayModal').classList.remove('show');
+        loadHolidays();
+    } catch (e) {
+        showToast(e.message, 'error');
+    }
+}
+
+function deleteHoliday(id) {
+    showConfirm('确认删除', '确定删除此节假日吗？', async () => {
+        try {
+            const res = await fetch(`${API_BASE}/holidays/${id}`, {
+                method: 'DELETE'
+            });
+
+            if (!res.ok) {
+                throw new Error('删除失败');
+            }
+
+            showToast('删除成功', 'success');
+            loadHolidays();
+        } catch (e) {
+            showToast(e.message, 'error');
+        }
+    });
+}
+
+function initModals() {
+    document.getElementById('btnAddItem').addEventListener('click', openAddItemModal);
+    document.getElementById('btnCancelItem').addEventListener('click', () => {
+        document.getElementById('itemModal').classList.remove('show');
+    });
+    document.getElementById('btnSaveItem').addEventListener('click', saveItem);
+
+    document.getElementById('btnAddHoliday').addEventListener('click', openAddHolidayModal);
+    document.getElementById('btnCancelHoliday').addEventListener('click', () => {
+        document.getElementById('holidayModal').classList.remove('show');
+    });
+    document.getElementById('btnSaveHoliday').addEventListener('click', saveHoliday);
+
+    document.getElementById('btnCancelSlot').addEventListener('click', () => {
+        document.getElementById('slotModal').classList.remove('show');
+    });
+    document.getElementById('btnSaveSlot').addEventListener('click', saveSlot);
+
+    document.getElementById('btnConfirmCancel').addEventListener('click', () => {
+        document.getElementById('confirmModal').classList.remove('show');
+    });
+    document.getElementById('btnConfirmOk').addEventListener('click', () => {
+        document.getElementById('confirmModal').classList.remove('show');
+        if (state.confirmCallback) {
+            state.confirmCallback();
+            state.confirmCallback = null;
+        }
+    });
+
+    document.getElementById('btnSearch').addEventListener('click', searchAppointments);
+    document.getElementById('btnReset').addEventListener('click', () => {
+        document.getElementById('filterDate').value = '';
+        document.getElementById('filterItem').value = '';
+        document.getElementById('filterStatus').value = '';
+        document.getElementById('filterPhone').value = '';
+        searchAppointments();
+    });
+
+    document.querySelectorAll('.modal').forEach(modal => {
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) {
+                modal.classList.remove('show');
+            }
+        });
+    });
+}
+
+function initTodayDate() {
+    const today = new Date();
+    const options = { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' };
+    document.getElementById('todayDate').textContent = today.toLocaleDateString('zh-CN', options);
+}
+
+function init() {
+    initTodayDate();
+    initNavigation();
+    initModals();
+    loadDashboard();
+}
+
+window.markArrived = markArrived;
+window.markCompleted = markCompleted;
+window.markCancelled = markCancelled;
+window.markPending = markPending;
+window.editItem = editItem;
+window.deleteItem = deleteItem;
+window.deleteHoliday = deleteHoliday;
+
+document.addEventListener('DOMContentLoaded', init);
