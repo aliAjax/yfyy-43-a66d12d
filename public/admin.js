@@ -11,6 +11,11 @@ const state = {
     reviewPage: 1,
     reviewTotal: 0,
     reviewPageSize: 20,
+    restrictions: [],
+    restrictionPage: 1,
+    restrictionTotal: 0,
+    restrictionPageSize: 20,
+    editingRestrictionId: null,
     editingItemId: null,
     editingMaterials: [],
     slotModalData: null,
@@ -133,7 +138,8 @@ function switchTab(tab) {
         items: '事项管理',
         holidays: '节假日管理',
         reminders: '提醒记录',
-        reviews: '评价管理'
+        reviews: '评价管理',
+        restrictions: '手机号限制'
     };
     document.getElementById('pageTitle').textContent = titles[tab];
 
@@ -149,6 +155,8 @@ function switchTab(tab) {
         loadReminders();
     } else if (tab === 'reviews') {
         loadReviews();
+    } else if (tab === 'restrictions') {
+        loadRestrictions();
     }
 }
 
@@ -1026,6 +1034,205 @@ function resetReviewFilters() {
     searchReviews();
 }
 
+async function loadRestrictions() {
+    await searchRestrictions();
+}
+
+async function searchRestrictions() {
+    const phone = document.getElementById('filterRestrictionPhone').value.trim();
+    const status = document.getElementById('filterRestrictionStatus').value;
+
+    let url = `${API_BASE}/phone-restrictions?page=${state.restrictionPage}&page_size=${state.restrictionPageSize}`;
+    if (phone) url += `&phone=${encodeURIComponent(phone)}`;
+    if (status) url += `&status=${status}`;
+
+    try {
+        const res = await fetch(url);
+        const data = await res.json();
+        state.restrictions = data.list;
+        state.restrictionTotal = data.total;
+        state.restrictionPage = data.page;
+        renderRestrictions();
+        renderRestrictionPagination(data.total_pages);
+    } catch (e) {
+        document.getElementById('restrictionList').innerHTML = '<tr><td colspan="7" class="loading">加载失败</td></tr>';
+    }
+}
+
+function getRestrictionStatusText(isActive) {
+    return isActive ? '限制中' : '已过期';
+}
+
+function getRestrictionStatusClass(isActive) {
+    return isActive ? 'status-cancelled' : 'status-completed';
+}
+
+function renderRestrictions() {
+    const tbody = document.getElementById('restrictionList');
+
+    if (state.restrictions.length === 0) {
+        tbody.innerHTML = `
+            <tr>
+                <td colspan="7" class="empty-state">
+                    <div class="empty-icon">🚫</div>
+                    <p>暂无手机号限制记录</p>
+                </td>
+            </tr>
+        `;
+        return;
+    }
+
+    tbody.innerHTML = state.restrictions.map(r => `
+        <tr>
+            <td>${r.id}</td>
+            <td>${r.phone}</td>
+            <td>${escapeHtml(r.reason) || '<span style="color:#999;">未填写</span>'}</td>
+            <td>${r.end_date}</td>
+            <td><span class="status-badge ${getRestrictionStatusClass(r.is_active)}">${getRestrictionStatusText(r.is_active)}</span></td>
+            <td>${r.created_at ? r.created_at.substring(0, 16) : '-'}</td>
+            <td>
+                <div class="action-buttons">
+                    <button class="btn btn-link" onclick="editRestriction(${r.id})">编辑</button>
+                    <button class="btn btn-link danger" onclick="deleteRestriction(${r.id})">删除</button>
+                </div>
+            </td>
+        </tr>
+    `).join('');
+}
+
+function renderRestrictionPagination(totalPages) {
+    const container = document.getElementById('restrictionPagination');
+
+    if (totalPages <= 1) {
+        container.innerHTML = '';
+        return;
+    }
+
+    let html = '<div class="pagination-info">共 ' + state.restrictionTotal + ' 条记录</div>';
+    html += '<div class="pagination-buttons">';
+
+    if (state.restrictionPage > 1) {
+        html += `<button class="btn btn-sm btn-secondary" onclick="goToRestrictionPage(${state.restrictionPage - 1})">上一页</button>`;
+    }
+
+    const startPage = Math.max(1, state.restrictionPage - 2);
+    const endPage = Math.min(totalPages, state.restrictionPage + 2);
+
+    for (let i = startPage; i <= endPage; i++) {
+        const active = i === state.restrictionPage ? 'active' : '';
+        html += `<button class="btn btn-sm ${active ? 'btn-primary' : 'btn-secondary'}" onclick="goToRestrictionPage(${i})">${i}</button>`;
+    }
+
+    if (state.restrictionPage < totalPages) {
+        html += `<button class="btn btn-sm btn-secondary" onclick="goToRestrictionPage(${state.restrictionPage + 1})">下一页</button>`;
+    }
+
+    html += '</div>';
+    container.innerHTML = html;
+}
+
+function goToRestrictionPage(page) {
+    state.restrictionPage = page;
+    searchRestrictions();
+}
+
+function resetRestrictionFilters() {
+    document.getElementById('filterRestrictionPhone').value = '';
+    document.getElementById('filterRestrictionStatus').value = '';
+    state.restrictionPage = 1;
+    searchRestrictions();
+}
+
+function openAddRestrictionModal() {
+    state.editingRestrictionId = null;
+    document.getElementById('restrictionModalTitle').textContent = '新增手机号限制';
+    document.getElementById('restrictionPhone').value = '';
+    document.getElementById('restrictionReason').value = '';
+    document.getElementById('restrictionEndDate').value = '';
+    document.getElementById('restrictionModal').classList.add('show');
+}
+
+async function editRestriction(id) {
+    const restriction = state.restrictions.find(r => r.id === id);
+    if (!restriction) return;
+
+    state.editingRestrictionId = id;
+    document.getElementById('restrictionModalTitle').textContent = '编辑手机号限制';
+    document.getElementById('restrictionPhone').value = restriction.phone;
+    document.getElementById('restrictionReason').value = restriction.reason || '';
+    document.getElementById('restrictionEndDate').value = restriction.end_date;
+    document.getElementById('restrictionModal').classList.add('show');
+}
+
+async function saveRestriction() {
+    const phone = document.getElementById('restrictionPhone').value.trim();
+    const reason = document.getElementById('restrictionReason').value.trim();
+    const endDate = document.getElementById('restrictionEndDate').value;
+
+    if (!phone) {
+        showToast('请输入手机号', 'error');
+        return;
+    }
+
+    if (!/^1[3-9]\d{9}$/.test(phone)) {
+        showToast('请输入正确的手机号', 'error');
+        return;
+    }
+
+    if (!endDate) {
+        showToast('请选择截止日期', 'error');
+        return;
+    }
+
+    try {
+        let res;
+        if (state.editingRestrictionId) {
+            res = await fetch(`${API_BASE}/phone-restrictions/${state.editingRestrictionId}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ phone, reason, end_date: endDate })
+            });
+        } else {
+            res = await fetch(`${API_BASE}/phone-restrictions`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ phone, reason, end_date: endDate })
+            });
+        }
+
+        const data = await res.json();
+        if (!res.ok) {
+            throw new Error(data.error || '保存失败');
+        }
+
+        showToast('保存成功', 'success');
+        document.getElementById('restrictionModal').classList.remove('show');
+        searchRestrictions();
+    } catch (e) {
+        showToast(e.message, 'error');
+    }
+}
+
+function deleteRestriction(id) {
+    const restriction = state.restrictions.find(r => r.id === id);
+    showConfirm('确认删除', `确定删除手机号 ${restriction.phone} 的限制吗？`, async () => {
+        try {
+            const res = await fetch(`${API_BASE}/phone-restrictions/${id}`, {
+                method: 'DELETE'
+            });
+
+            if (!res.ok) {
+                throw new Error('删除失败');
+            }
+
+            showToast('删除成功', 'success');
+            searchRestrictions();
+        } catch (e) {
+            showToast(e.message, 'error');
+        }
+    });
+}
+
 function openSlotModal(itemId, itemName) {
     const today = formatDate(new Date());
     state.slotModalData = { itemId, itemName, date: today };
@@ -1155,6 +1362,18 @@ function initModals() {
     });
     document.getElementById('btnResetReview').addEventListener('click', resetReviewFilters);
 
+    document.getElementById('btnAddRestriction').addEventListener('click', openAddRestrictionModal);
+    document.getElementById('btnCancelRestriction').addEventListener('click', () => {
+        document.getElementById('restrictionModal').classList.remove('show');
+    });
+    document.getElementById('btnSaveRestriction').addEventListener('click', saveRestriction);
+
+    document.getElementById('btnSearchRestriction').addEventListener('click', () => {
+        state.restrictionPage = 1;
+        searchRestrictions();
+    });
+    document.getElementById('btnResetRestriction').addEventListener('click', resetRestrictionFilters);
+
     document.querySelectorAll('.modal').forEach(modal => {
         modal.addEventListener('click', (e) => {
             if (e.target === modal) {
@@ -1190,5 +1409,8 @@ window.removeMaterial = removeMaterial;
 window.moveMaterial = moveMaterial;
 window.goToReminderPage = goToReminderPage;
 window.goToReviewPage = goToReviewPage;
+window.editRestriction = editRestriction;
+window.deleteRestriction = deleteRestriction;
+window.goToRestrictionPage = goToRestrictionPage;
 
 document.addEventListener('DOMContentLoaded', init);

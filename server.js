@@ -84,6 +84,14 @@ db.exec(`
     UNIQUE(appointment_id)
   );
 
+  CREATE TABLE IF NOT EXISTS phone_restrictions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    phone TEXT NOT NULL UNIQUE,
+    reason TEXT,
+    end_date TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
   CREATE INDEX IF NOT EXISTS idx_materials_item ON item_materials(item_id);
   CREATE INDEX IF NOT EXISTS idx_appointments_phone_item ON appointments(phone, item_id);
   CREATE INDEX IF NOT EXISTS idx_appointments_date ON appointments(appointment_date);
@@ -93,6 +101,8 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_reviews_appointment ON appointment_reviews(appointment_id);
   CREATE INDEX IF NOT EXISTS idx_reviews_item ON appointment_reviews(item_id);
   CREATE INDEX IF NOT EXISTS idx_reviews_created ON appointment_reviews(created_at);
+  CREATE INDEX IF NOT EXISTS idx_phone_restrictions_phone ON phone_restrictions(phone);
+  CREATE INDEX IF NOT EXISTS idx_phone_restrictions_end_date ON phone_restrictions(end_date);
 `);
 
 const columns = db.prepare("PRAGMA table_info(items)").all();
@@ -508,6 +518,26 @@ app.post('/api/appointments', (req, res) => {
   const phoneRegex = /^1[3-9]\d{9}$/;
   if (!phoneRegex.test(phone)) {
     return res.status(400).json({ error: '请输入正确的手机号' });
+  }
+
+  const restriction = db.prepare(
+    'SELECT * FROM phone_restrictions WHERE phone = ?'
+  ).get(phone);
+
+  if (restriction) {
+    const todayStr = getTodayStr();
+    if (restriction.end_date >= todayStr) {
+      return res.status(400).json({
+        error: `该手机号已被限制预约，限制原因：${restriction.reason || '未填写'}，截止日期：${restriction.end_date}`,
+        restriction: {
+          phone: restriction.phone,
+          reason: restriction.reason,
+          end_date: restriction.end_date
+        }
+      });
+    } else {
+      db.prepare('DELETE FROM phone_restrictions WHERE id = ?').run(restriction.id);
+    }
   }
 
   const dateObj = new Date(appointment_date);
@@ -1038,6 +1068,168 @@ app.get('/api/reviews', (req, res) => {
     page_size: limit,
     total_pages: Math.ceil(total / limit)
   });
+});
+
+app.get('/api/phone-restrictions', (req, res) => {
+  const { phone, status, page = 1, page_size = 20 } = req.query;
+
+  let countSql = 'SELECT COUNT(*) as total FROM phone_restrictions WHERE 1=1';
+  let sql = 'SELECT * FROM phone_restrictions WHERE 1=1';
+  const params = [];
+  const countParams = [];
+
+  if (phone) {
+    sql += ' AND phone LIKE ?';
+    countSql += ' AND phone LIKE ?';
+    params.push(`%${phone}%`);
+    countParams.push(`%${phone}%`);
+  }
+
+  if (status === 'active') {
+    const todayStr = getTodayStr();
+    sql += ' AND end_date >= ?';
+    countSql += ' AND end_date >= ?';
+    params.push(todayStr);
+    countParams.push(todayStr);
+  } else if (status === 'expired') {
+    const todayStr = getTodayStr();
+    sql += ' AND end_date < ?';
+    countSql += ' AND end_date < ?';
+    params.push(todayStr);
+    countParams.push(todayStr);
+  }
+
+  sql += ' ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?';
+  const limit = parseInt(page_size) || 20;
+  const offset = (parseInt(page) - 1) * limit;
+  params.push(limit, offset);
+
+  const restrictions = db.prepare(sql).all(...params);
+  const total = db.prepare(countSql).get(...countParams).total;
+
+  const todayStr = getTodayStr();
+  const result = restrictions.map(r => ({
+    ...r,
+    is_active: r.end_date >= todayStr
+  }));
+
+  res.json({
+    list: result,
+    total,
+    page: parseInt(page),
+    page_size: limit,
+    total_pages: Math.ceil(total / limit)
+  });
+});
+
+app.post('/api/phone-restrictions', (req, res) => {
+  const { phone, reason, end_date } = req.body;
+
+  if (!phone) {
+    return res.status(400).json({ error: '手机号不能为空' });
+  }
+
+  const phoneRegex = /^1[3-9]\d{9}$/;
+  if (!phoneRegex.test(phone)) {
+    return res.status(400).json({ error: '请输入正确的手机号' });
+  }
+
+  if (!end_date) {
+    return res.status(400).json({ error: '截止日期不能为空' });
+  }
+
+  if (!isValidDate(end_date)) {
+    return res.status(400).json({ error: '截止日期格式不正确' });
+  }
+
+  const todayStr = getTodayStr();
+  if (end_date < todayStr) {
+    return res.status(400).json({ error: '截止日期不能早于今天' });
+  }
+
+  const existing = db.prepare('SELECT id FROM phone_restrictions WHERE phone = ?').get(phone);
+  if (existing) {
+    return res.status(400).json({ error: '该手机号已在限制名单中' });
+  }
+
+  try {
+    const result = db.prepare(
+      'INSERT INTO phone_restrictions (phone, reason, end_date) VALUES (?, ?, ?)'
+    ).run(phone, reason || '', end_date);
+
+    res.json({
+      id: result.lastInsertRowid,
+      phone,
+      reason: reason || '',
+      end_date,
+      is_active: true
+    });
+  } catch (e) {
+    res.status(500).json({ error: '添加失败' });
+  }
+});
+
+app.put('/api/phone-restrictions/:id', (req, res) => {
+  const { id } = req.params;
+  const { phone, reason, end_date } = req.body;
+
+  const restriction = db.prepare('SELECT * FROM phone_restrictions WHERE id = ?').get(id);
+  if (!restriction) {
+    return res.status(404).json({ error: '限制记录不存在' });
+  }
+
+  if (phone !== undefined) {
+    if (!phone) {
+      return res.status(400).json({ error: '手机号不能为空' });
+    }
+    const phoneRegex = /^1[3-9]\d{9}$/;
+    if (!phoneRegex.test(phone)) {
+      return res.status(400).json({ error: '请输入正确的手机号' });
+    }
+    const existing = db.prepare('SELECT id FROM phone_restrictions WHERE phone = ? AND id != ?').get(phone, id);
+    if (existing) {
+      return res.status(400).json({ error: '该手机号已在限制名单中' });
+    }
+  }
+
+  if (end_date !== undefined) {
+    if (!isValidDate(end_date)) {
+      return res.status(400).json({ error: '截止日期格式不正确' });
+    }
+  }
+
+  const newPhone = phone !== undefined ? phone : restriction.phone;
+  const newReason = reason !== undefined ? reason : restriction.reason;
+  const newEndDate = end_date !== undefined ? end_date : restriction.end_date;
+
+  try {
+    db.prepare(
+      'UPDATE phone_restrictions SET phone = ?, reason = ?, end_date = ? WHERE id = ?'
+    ).run(newPhone, newReason, newEndDate, id);
+
+    const todayStr = getTodayStr();
+    res.json({
+      id: parseInt(id),
+      phone: newPhone,
+      reason: newReason,
+      end_date: newEndDate,
+      is_active: newEndDate >= todayStr
+    });
+  } catch (e) {
+    res.status(500).json({ error: '更新失败' });
+  }
+});
+
+app.delete('/api/phone-restrictions/:id', (req, res) => {
+  const { id } = req.params;
+
+  const restriction = db.prepare('SELECT id FROM phone_restrictions WHERE id = ?').get(id);
+  if (!restriction) {
+    return res.status(404).json({ error: '限制记录不存在' });
+  }
+
+  db.prepare('DELETE FROM phone_restrictions WHERE id = ?').run(id);
+  res.json({ success: true });
 });
 
 app.get('/', (req, res) => {
