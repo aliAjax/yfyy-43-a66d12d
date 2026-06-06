@@ -84,6 +84,8 @@ if (!hasDefaultMaxCount) {
   db.exec('ALTER TABLE items ADD COLUMN default_max_count INTEGER NOT NULL DEFAULT 20');
 }
 
+db.prepare("UPDATE appointment_reminders SET send_status = 'simulated' WHERE send_status = 'sent'").run();
+
 function initDefaultData() {
   const itemCount = db.prepare('SELECT COUNT(*) as cnt FROM items').get().cnt;
   if (itemCount === 0) {
