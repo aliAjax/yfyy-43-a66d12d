@@ -175,7 +175,8 @@ function getMaxAdvanceWeeks(item) {
     if (!item || item.advance_weeks === null || item.advance_weeks === undefined || item.advance_weeks === '') {
         return 4;
     }
-    return parseInt(item.advance_weeks) || 4;
+    const weeks = parseInt(item.advance_weeks);
+    return isNaN(weeks) ? 4 : weeks;
 }
 
 function isSameDayBookingAllowed(item) {
@@ -258,7 +259,10 @@ function isReschedulingAllowed(appointment, item) {
     if (!appointment || appointment.status !== 'pending') return false;
     if (!item) return true;
 
-    const deadlineHours = item.reschedule_deadline_hours;
+    let deadlineHours = item.reschedule_deadline_hours;
+    if (deadlineHours === null || deadlineHours === undefined || deadlineHours === '') {
+        deadlineHours = item.cancel_deadline_hours;
+    }
     if (deadlineHours === null || deadlineHours === undefined || deadlineHours === '') {
         const today = new Date();
         today.setHours(0, 0, 0, 0);
@@ -766,7 +770,10 @@ function renderAppointmentDetail(appointment, materials = []) {
         }
 
         if (!canReschedule) {
-            const deadlineHours = item?.reschedule_deadline_hours;
+            let deadlineHours = item?.reschedule_deadline_hours;
+            if (deadlineHours === null || deadlineHours === undefined || deadlineHours === '') {
+                deadlineHours = item?.cancel_deadline_hours;
+            }
             if (deadlineHours !== null && deadlineHours !== undefined && deadlineHours !== '') {
                 rescheduleTip = `<div class="detail-tip detail-tip-muted">⏰ 已超过改期截止时间（预约前 ${deadlineHours} 小时内不可改期）</div>`;
             } else {

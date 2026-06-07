@@ -346,7 +346,7 @@ function getAppointmentStartTime(timeSlot) {
 }
 
 function getMaxAdvanceDate(item) {
-  const weeks = item.advance_weeks || 4;
+  const weeks = (item.advance_weeks !== null && item.advance_weeks !== undefined) ? item.advance_weeks : 4;
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const maxDate = new Date(today);
@@ -398,7 +398,10 @@ function isCancellationAllowed(appointment, item) {
 function isReschedulingAllowed(appointment, item) {
   if (appointment.status !== 'pending') return false;
 
-  const deadlineHours = item.reschedule_deadline_hours;
+  let deadlineHours = item.reschedule_deadline_hours;
+  if (deadlineHours === null || deadlineHours === undefined) {
+    deadlineHours = item.cancel_deadline_hours;
+  }
   if (deadlineHours === null || deadlineHours === undefined) {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -414,7 +417,9 @@ function isReschedulingAllowed(appointment, item) {
 }
 
 function getMaxActiveAppointments(item) {
-  return item.max_active_appointments || 1;
+  return (item.max_active_appointments !== null && item.max_active_appointments !== undefined)
+    ? item.max_active_appointments
+    : 1;
 }
 
 function countActiveAppointments(phone, itemId) {
@@ -2845,7 +2850,10 @@ app.post('/api/appointments/:id/reschedule', (req, res) => {
   }
 
   if (!isReschedulingAllowed(appointment, item)) {
-    const deadlineHours = item.reschedule_deadline_hours;
+    let deadlineHours = item.reschedule_deadline_hours;
+    if (deadlineHours === null || deadlineHours === undefined) {
+      deadlineHours = item.cancel_deadline_hours;
+    }
     if (deadlineHours !== null && deadlineHours !== undefined) {
       return res.status(400).json({ error: `已超过改期截止时间（预约前 ${deadlineHours} 小时内不可改期）` });
     }
