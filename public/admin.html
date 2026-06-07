@@ -42,6 +42,10 @@
                     <span class="nav-icon">⭐</span>
                     <span>评价管理</span>
                 </div>
+                <div class="nav-item" data-tab="reschedules">
+                    <span class="nav-icon">🔄</span>
+                    <span>改期记录</span>
+                </div>
                 <div class="nav-item" data-tab="restrictions">
                     <span class="nav-icon">🚫</span>
                     <span>手机号限制</span>
@@ -394,6 +398,57 @@
                     </div>
 
                     <div class="pagination" id="reviewPagination"></div>
+                </div>
+
+                <div class="tab-content" id="tab-reschedules">
+                    <div class="page-header">
+                        <h3>改期记录</h3>
+                    </div>
+
+                    <div class="filter-bar">
+                        <div class="filter-item">
+                            <label>日期</label>
+                            <input type="date" id="filterRescheduleDate">
+                        </div>
+                        <div class="filter-item">
+                            <label>事项</label>
+                            <select id="filterRescheduleItem">
+                                <option value="">全部事项</option>
+                            </select>
+                        </div>
+                        <div class="filter-item">
+                            <label>手机号</label>
+                            <input type="text" id="filterReschedulePhone" placeholder="搜索手机号">
+                        </div>
+                        <div class="filter-item filter-actions">
+                            <button class="btn btn-primary" id="btnSearchReschedule">查询</button>
+                            <button class="btn btn-secondary" id="btnResetReschedule">重置</button>
+                        </div>
+                    </div>
+
+                    <div class="table-container">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>ID</th>
+                                    <th>预约编号</th>
+                                    <th>事项</th>
+                                    <th>姓名</th>
+                                    <th>手机号</th>
+                                    <th>原预约</th>
+                                    <th>新预约</th>
+                                    <th>改期原因</th>
+                                    <th>操作人</th>
+                                    <th>改期时间</th>
+                                </tr>
+                            </thead>
+                            <tbody id="rescheduleList">
+                                <tr><td colspan="10" class="loading">加载中...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class="pagination" id="reschedulePagination"></div>
                 </div>
 
                 <div class="tab-content" id="tab-restrictions">

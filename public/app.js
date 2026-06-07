@@ -9,7 +9,14 @@ const state = {
     currentWeekOffset: 0,
     currentAppointment: null,
     currentRating: 0,
-    currentReview: null
+    currentReview: null,
+    reschedule: {
+        weekOffset: 0,
+        selectedDate: null,
+        selectedTimeSlot: null,
+        timeSlots: [],
+        slotMode: 'window'
+    }
 };
 
 const API_BASE = '/api';
@@ -594,6 +601,7 @@ function renderAppointmentDetail(appointment, materials = []) {
     const statusText = getStatusText(appointment.status);
     const statusClass = getStatusClass(appointment.status);
     const canCancel = appointment.status === 'pending';
+    const canReschedule = appointment.status === 'pending';
     const canReview = appointment.status === 'completed' && !state.currentReview;
 
     const materialsHtml = materials.length > 0 ? `
@@ -672,6 +680,7 @@ function renderAppointmentDetail(appointment, materials = []) {
             </div>
             ${reviewHtml}
         </div>
+        ${canReschedule ? '<div class="detail-tip">💡 该预约处于待办理状态，您可以在线改期</div>' : ''}
         ${canCancel ? '<div class="detail-tip">💡 该预约处于待办理状态，您可以在线取消</div>' : ''}
         ${appointment.status === 'cancelled' ? '<div class="detail-tip detail-tip-muted">该预约已取消，号源已释放</div>' : ''}
         ${appointment.status === 'completed' && !state.currentReview ? '<div class="detail-tip">⭐ 您已完成办理，点击下方按钮进行满意度评价</div>' : ''}
@@ -679,6 +688,11 @@ function renderAppointmentDetail(appointment, materials = []) {
     `;
 
     document.getElementById('appointmentDetail').innerHTML = detailHtml;
+
+    const rescheduleBtn = document.getElementById('rescheduleAppointmentBtn');
+    if (rescheduleBtn) {
+        rescheduleBtn.style.display = canReschedule ? 'inline-block' : 'none';
+    }
 
     const cancelBtn = document.getElementById('cancelAppointmentBtn');
     if (canCancel) {
@@ -896,6 +910,352 @@ async function confirmCancelAppointment() {
     }
 }
 
+function openRescheduleModal() {
+    if (!state.currentAppointment) return;
+
+    state.reschedule.weekOffset = 0;
+    state.reschedule.selectedDate = null;
+    state.reschedule.selectedTimeSlot = null;
+    state.reschedule.timeSlots = [];
+    document.getElementById('rescheduleReason').value = '';
+
+    document.getElementById('rescheduleStep1').style.display = 'block';
+    document.getElementById('rescheduleStep2').style.display = 'none';
+    document.getElementById('rescheduleModal').classList.add('show');
+
+    renderCurrentAppointmentInfo();
+    renderRescheduleDateGrid();
+    updateRescheduleConfirmBtn();
+}
+
+function closeRescheduleModal() {
+    document.getElementById('rescheduleModal').classList.remove('show');
+}
+
+function renderCurrentAppointmentInfo() {
+    if (!state.currentAppointment) return;
+
+    const apt = state.currentAppointment;
+    document.getElementById('currentAppointmentInfo').innerHTML = `
+        <div class="reschedule-info-item">
+            <span class="reschedule-info-label">办理事项</span>
+            <span class="reschedule-info-value">${escapeHtml(apt.item_name || '')}</span>
+        </div>
+        <div class="reschedule-info-item">
+            <span class="reschedule-info-label">预约日期</span>
+            <span class="reschedule-info-value">${apt.appointment_date}</span>
+        </div>
+        <div class="reschedule-info-item">
+            <span class="reschedule-info-label">预约时段</span>
+            <span class="reschedule-info-value">${apt.time_slot}</span>
+        </div>
+        <div class="reschedule-info-item">
+            <span class="reschedule-info-label">办理窗口</span>
+            <span class="reschedule-info-value">${apt.window_name || '系统分配'}</span>
+        </div>
+    `;
+}
+
+function renderRescheduleDateGrid() {
+    const dates = getWeekDates(state.reschedule.weekOffset);
+    const weekStart = formatDate(dates[0]);
+    const weekEnd = formatDate(dates[6]);
+    document.getElementById('rescheduleDateRange').textContent = `${weekStart} ~ ${weekEnd}`;
+
+    const dayNames = ['日', '一', '二', '三', '四', '五', '六'];
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const container = document.getElementById('rescheduleDateGrid');
+    container.innerHTML = dates.map(date => {
+        const dateStr = formatDate(date);
+        const isPast = date < today;
+        const isWeekend = date.getDay() === 0 || date.getDay() === 6;
+        const isToday = formatDate(date) === formatDate(today);
+        const isSelected = state.reschedule.selectedDate === dateStr;
+        const isSameAsOld = state.currentAppointment && dateStr === state.currentAppointment.appointment_date;
+
+        let classes = 'date-item';
+        if (isPast) classes += ' disabled';
+        if (isWeekend) classes += ' disabled';
+        if (isToday) classes += ' today';
+        if (isSelected) classes += ' selected';
+        if (isSameAsOld) classes += ' same-as-old';
+
+        return `
+            <div class="${classes}" data-date="${dateStr}" title="${isSameAsOld ? '当前预约日期' : ''}">
+                <span class="date-day">${isToday ? '今天' : '周' + dayNames[date.getDay()]}</span>
+                <span class="date-num">${date.getDate()}</span>
+            </div>
+        `;
+    }).join('');
+
+    container.querySelectorAll('.date-item:not(.disabled)').forEach(item => {
+        item.addEventListener('click', () => {
+            state.reschedule.selectedDate = item.dataset.date;
+            state.reschedule.selectedTimeSlot = null;
+            renderRescheduleDateGrid();
+            loadRescheduleTimeSlots();
+            updateRescheduleConfirmBtn();
+        });
+    });
+
+    if (state.reschedule.selectedDate) {
+        loadRescheduleTimeSlots();
+    }
+}
+
+async function loadRescheduleTimeSlots() {
+    if (!state.currentAppointment || !state.reschedule.selectedDate) return;
+
+    const section = document.getElementById('rescheduleTimeSlotsSection');
+    section.style.display = 'block';
+
+    document.getElementById('rescheduleTimeSlots').innerHTML = '<div class="loading">加载时段中...</div>';
+    state.reschedule.selectedTimeSlot = null;
+
+    try {
+        const res = await fetch(`${API_BASE}/slots/${state.currentAppointment.item_id}/${state.reschedule.selectedDate}`);
+        const data = await res.json();
+
+        if (!data.available) {
+            document.getElementById('rescheduleTimeSlots').innerHTML = `
+                <div class="empty-state">
+                    <div class="empty-icon">📅</div>
+                    <p>${data.reason || '该日期不可预约'}</p>
+                </div>
+            `;
+            return;
+        }
+
+        if (data.use_time_slots && data.time_slots && data.time_slots.length > 0) {
+            state.reschedule.slotMode = 'time';
+            state.reschedule.timeSlots = data.time_slots;
+            renderRescheduleTimeSlotCapacities(data.time_slots);
+        } else {
+            state.reschedule.slotMode = 'window';
+            state.reschedule.timeSlots = data.time_slots || [];
+            renderRescheduleTimeSlots(data.time_slots || []);
+        }
+    } catch (e) {
+        document.getElementById('rescheduleTimeSlots').innerHTML = '<div class="empty-state"><p>加载失败</p></div>';
+    }
+    updateRescheduleConfirmBtn();
+}
+
+function renderRescheduleTimeSlots(slots) {
+    const container = document.getElementById('rescheduleTimeSlots');
+    
+    if (slots.every(s => !s.available)) {
+        container.innerHTML = `
+            <div class="empty-state">
+                <div class="empty-icon">⏰</div>
+                <p>今日号源已满，请选择其他日期</p>
+            </div>
+        `;
+        return;
+    }
+
+    const currentSlot = state.currentAppointment?.time_slot;
+    const isSameDate = state.reschedule.selectedDate === state.currentAppointment?.appointment_date;
+
+    container.innerHTML = slots.map(slot => {
+        const isCurrent = isSameDate && slot.time === currentSlot;
+        return `
+            <div class="time-slot ${!slot.available ? 'disabled' : ''} ${state.reschedule.selectedTimeSlot === slot.time ? 'selected' : ''} ${isCurrent ? 'current-slot' : ''}" 
+                 data-time="${slot.time}"
+                 title="${isCurrent ? '当前预约时段' : ''}">
+                ${slot.time}
+                ${isCurrent ? ' (当前)' : ''}
+            </div>
+        `;
+    }).join('');
+
+    container.querySelectorAll('.time-slot:not(.disabled):not(.current-slot)').forEach(item => {
+        item.addEventListener('click', () => {
+            state.reschedule.selectedTimeSlot = item.dataset.time;
+            renderRescheduleTimeSlots(slots);
+            updateRescheduleConfirmBtn();
+        });
+    });
+}
+
+function renderRescheduleTimeSlotCapacities(timeSlots) {
+    const container = document.getElementById('rescheduleTimeSlots');
+    
+    const allFull = timeSlots.every(ts => ts.current_count >= ts.max_count);
+    if (allFull) {
+        container.innerHTML = `
+            <div class="empty-state">
+                <div class="empty-icon">⏰</div>
+                <p>今日号源已满，请选择其他日期</p>
+            </div>
+        `;
+        return;
+    }
+
+    const currentSlot = state.currentAppointment?.time_slot;
+    const isSameDate = state.reschedule.selectedDate === state.currentAppointment?.appointment_date;
+
+    container.innerHTML = timeSlots.map(ts => {
+        const remaining = ts.max_count - ts.current_count;
+        const isFull = remaining <= 0;
+        const slotKey = `${ts.start_time}-${ts.end_time}`;
+        const isSelected = state.reschedule.selectedTimeSlot === slotKey;
+        const isCurrent = isSameDate && slotKey === currentSlot;
+        
+        let classes = 'time-slot-capacity';
+        if (isFull) classes += ' disabled';
+        if (isSelected) classes += ' selected';
+        if (isCurrent) classes += ' current-slot';
+
+        return `
+            <div class="${classes}"
+                 data-start="${ts.start_time}" data-end="${ts.end_time}" data-key="${slotKey}"
+                 title="${isCurrent ? '当前预约时段' : ''}">
+                <div class="tsc-time">${ts.start_time} - ${ts.end_time} ${isCurrent ? ' (当前)' : ''}</div>
+                <div class="tsc-info">
+                    <span class="tsc-remaining ${remaining <= 3 && remaining > 0 ? 'few' : ''}">
+                        ${isFull ? '已满' : `剩余 ${remaining} 个`}
+                    </span>
+                    <span class="tsc-total">共 ${ts.max_count} 个</span>
+                </div>
+            </div>
+        `;
+    }).join('');
+
+    container.querySelectorAll('.time-slot-capacity:not(.disabled):not(.current-slot)').forEach(item => {
+        item.addEventListener('click', () => {
+            const key = item.dataset.key;
+            state.reschedule.selectedTimeSlot = key;
+            renderRescheduleTimeSlotCapacities(timeSlots);
+            updateRescheduleConfirmBtn();
+        });
+    });
+}
+
+function updateRescheduleConfirmBtn() {
+    const btn = document.getElementById('confirmRescheduleBtn');
+    const hasDate = !!state.reschedule.selectedDate;
+    const hasTime = !!state.reschedule.selectedTimeSlot;
+    btn.disabled = !(hasDate && hasTime);
+}
+
+function openConfirmReschedule() {
+    if (!state.reschedule.selectedDate || !state.reschedule.selectedTimeSlot) return;
+
+    const oldDate = state.currentAppointment.appointment_date;
+    const oldTime = state.currentAppointment.time_slot;
+    const newDate = state.reschedule.selectedDate;
+    const newTime = state.reschedule.selectedTimeSlot;
+
+    const infoHtml = `
+        <p><strong>原预约：</strong>${oldDate} ${oldTime}</p>
+        <p><strong>新预约：</strong>${newDate} ${newTime}</p>
+    `;
+    document.getElementById('confirmRescheduleInfo').innerHTML = infoHtml;
+
+    document.getElementById('confirmRescheduleModal').classList.add('show');
+}
+
+function closeConfirmReschedule() {
+    document.getElementById('confirmRescheduleModal').classList.remove('show');
+}
+
+async function submitReschedule() {
+    if (!state.currentAppointment || !state.reschedule.selectedDate || !state.reschedule.selectedTimeSlot) return;
+
+    const confirmBtn = document.getElementById('confirmRescheduleOkBtn');
+    confirmBtn.disabled = true;
+    confirmBtn.textContent = '改期中...';
+
+    try {
+        const res = await fetch(`${API_BASE}/appointments/${state.currentAppointment.id}/reschedule`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                phone: state.currentAppointment.phone,
+                new_date: state.reschedule.selectedDate,
+                new_time_slot: state.reschedule.selectedTimeSlot,
+                reason: document.getElementById('rescheduleReason').value.trim()
+            })
+        });
+
+        const data = await res.json();
+
+        if (!res.ok) {
+            throw new Error(data.error || '改期失败');
+        }
+
+        closeConfirmReschedule();
+
+        state.currentAppointment = data.appointment;
+
+        document.getElementById('rescheduleStep1').style.display = 'none';
+        document.getElementById('rescheduleStep2').style.display = 'block';
+
+        const successDetails = document.getElementById('rescheduleSuccessDetails');
+        successDetails.innerHTML = `
+            <p><strong>预约编号：</strong>${data.appointment.id}</p>
+            <p><strong>办理事项：</strong>${data.appointment.item_name || ''}</p>
+            <p><strong>办理窗口：</strong>${data.appointment.window_name || '系统分配'}</p>
+            <p><strong>预约姓名：</strong>${data.appointment.user_name}</p>
+            <p><strong>联系电话：</strong>${data.appointment.phone}</p>
+            <p><strong>预约日期：</strong>${data.appointment.appointment_date}</p>
+            <p><strong>预约时段：</strong>${data.appointment.time_slot}</p>
+        `;
+
+        showToast('改期成功！', 'success');
+    } catch (e) {
+        showToast(e.message, 'error');
+    } finally {
+        confirmBtn.disabled = false;
+        confirmBtn.textContent = '确认改期';
+    }
+}
+
+function initRescheduleEvents() {
+    document.getElementById('rescheduleAppointmentBtn').addEventListener('click', openRescheduleModal);
+    document.getElementById('closeRescheduleModal').addEventListener('click', closeRescheduleModal);
+    document.getElementById('cancelRescheduleBtn').addEventListener('click', closeRescheduleModal);
+    document.getElementById('confirmRescheduleBtn').addEventListener('click', openConfirmReschedule);
+    document.getElementById('cancelRescheduleConfirmBtn').addEventListener('click', closeConfirmReschedule);
+    document.getElementById('confirmRescheduleOkBtn').addEventListener('click', submitReschedule);
+    document.getElementById('rescheduleDoneBtn').addEventListener('click', () => {
+        closeRescheduleModal();
+        if (state.currentAppointment) {
+            renderAppointmentDetail(state.currentAppointment);
+            loadLatestReminderForDetail(state.currentAppointment.id, state.currentAppointment.phone);
+        }
+    });
+
+    document.getElementById('reschedulePrevWeek').addEventListener('click', () => {
+        if (state.reschedule.weekOffset > 0) {
+            state.reschedule.weekOffset--;
+            renderRescheduleDateGrid();
+        }
+    });
+
+    document.getElementById('rescheduleNextWeek').addEventListener('click', () => {
+        if (state.reschedule.weekOffset < 4) {
+            state.reschedule.weekOffset++;
+            renderRescheduleDateGrid();
+        }
+    });
+
+    document.getElementById('rescheduleModal').addEventListener('click', (e) => {
+        if (e.target.id === 'rescheduleModal') {
+            closeRescheduleModal();
+        }
+    });
+
+    document.getElementById('confirmRescheduleModal').addEventListener('click', (e) => {
+        if (e.target.id === 'confirmRescheduleModal') {
+            closeConfirmReschedule();
+        }
+    });
+}
+
 function initQueryEvents() {
     document.getElementById('openQueryBtn').addEventListener('click', openQueryModal);
     document.getElementById('closeQueryModal').addEventListener('click', closeQueryModal);
@@ -959,6 +1319,7 @@ function init() {
     loadItems();
     initEvents();
     initQueryEvents();
+    initRescheduleEvents();
 }
 
 document.addEventListener('DOMContentLoaded', init);

@@ -153,6 +153,7 @@
                     <div class="appointment-detail-card" id="appointmentDetail"></div>
                     <div class="query-actions">
                         <button class="btn btn-secondary" id="backToQuery">重新查询</button>
+                        <button class="btn btn-warning" id="rescheduleAppointmentBtn" style="display:none;">📅 改期预约</button>
                         <button class="btn btn-danger" id="cancelAppointmentBtn" style="display:none;">取消预约</button>
                         <button class="btn btn-primary" id="reviewBtn" style="display:none;">⭐ 办理评价</button>
                     </div>
@@ -211,6 +212,85 @@
             <h3>评价提交成功！</h3>
             <p style="color:#666; margin:12px 0 20px; font-size:14px;">感谢您的宝贵意见，我们会持续改进服务质量。</p>
             <button class="btn btn-primary" id="closeReviewSuccess">我知道了</button>
+        </div>
+    </div>
+
+    <div class="modal" id="rescheduleModal">
+        <div class="modal-content query-modal-content reschedule-modal">
+            <div class="modal-header">
+                <h3>预约改期</h3>
+                <button class="modal-close" id="closeRescheduleModal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="reschedule-step" id="rescheduleStep1">
+                    <div class="reschedule-current-info">
+                        <div class="reschedule-section-title">📅 当前预约信息</div>
+                        <div class="reschedule-info-grid" id="currentAppointmentInfo"></div>
+                    </div>
+                    
+                    <div class="reschedule-divider">
+                        <span>⬇ 改为 ⬇</span>
+                    </div>
+
+                    <div class="reschedule-new-info">
+                        <div class="reschedule-section-title">🆕 选择新的预约日期和时段</div>
+                        
+                        <div class="date-picker-section">
+                            <label>选择日期：</label>
+                            <div class="date-nav">
+                                <button class="date-nav-btn" id="reschedulePrevWeek">&lt; 上周</button>
+                                <span class="date-range" id="rescheduleDateRange"></span>
+                                <button class="date-nav-btn" id="rescheduleNextWeek">下周 &gt;</button>
+                            </div>
+                            <div class="date-grid" id="rescheduleDateGrid"></div>
+                        </div>
+
+                        <div class="time-slots-section" id="rescheduleTimeSlotsSection" style="display:none;">
+                            <label>选择时段：</label>
+                            <div class="time-slots" id="rescheduleTimeSlots"></div>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="rescheduleReason">改期原因（选填）</label>
+                        <textarea id="rescheduleReason" placeholder="请简要说明改期原因" rows="2" maxlength="200"></textarea>
+                    </div>
+
+                    <div class="btn-group">
+                        <button class="btn btn-secondary" id="cancelRescheduleBtn">取消</button>
+                        <button class="btn btn-primary" id="confirmRescheduleBtn" disabled>确认改期</button>
+                    </div>
+                </div>
+
+                <div class="reschedule-step" id="rescheduleStep2" style="display:none;">
+                    <div class="success-box" style="padding: 20px 0;">
+                        <div class="success-icon">✓</div>
+                        <h2>改期成功！</h2>
+                        <div class="success-details" id="rescheduleSuccessDetails"></div>
+                        <div class="tips">
+                            <p><strong>温馨提示：</strong></p>
+                            <ul>
+                                <li>请您在新的预约时段前10分钟到达办事大厅</li>
+                                <li>请携带好相关证件和材料</li>
+                            </ul>
+                        </div>
+                        <button class="btn btn-primary" id="rescheduleDoneBtn">完成</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal" id="confirmRescheduleModal">
+        <div class="modal-content confirm-modal-content">
+            <div class="confirm-icon">⚠️</div>
+            <h3>确认改期？</h3>
+            <div id="confirmRescheduleInfo" style="color:#666; margin:12px 0 20px; font-size:14px; text-align:left;"></div>
+            <p style="color:#999; margin:0 0 20px; font-size:13px;">改期后原号源将立即释放，新号源将被占用。</p>
+            <div class="btn-group">
+                <button class="btn btn-secondary" id="cancelRescheduleConfirmBtn">再想想</button>
+                <button class="btn btn-primary" id="confirmRescheduleOkBtn">确认改期</button>
+            </div>
         </div>
     </div>
 

@@ -1173,3 +1173,125 @@ h2 {
     color: #999;
     margin-top: 4px;
 }
+
+.btn-warning {
+    background: linear-gradient(135deg, #f6ad55, #ed8936);
+    color: white;
+    border: none;
+    padding: 10px 20px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 500;
+    transition: all 0.2s;
+}
+
+.btn-warning:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(237, 137, 54, 0.3);
+}
+
+.btn-warning:active {
+    transform: translateY(0);
+}
+
+.btn-warning:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none;
+}
+
+.reschedule-modal .modal-content {
+    max-width: 520px;
+}
+
+.reschedule-section-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: #333;
+    margin-bottom: 12px;
+}
+
+.reschedule-current-info {
+    background: #f7fafc;
+    padding: 16px;
+    border-radius: 10px;
+    margin-bottom: 8px;
+}
+
+.reschedule-info-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px 16px;
+}
+
+.reschedule-info-item {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.reschedule-info-label {
+    font-size: 12px;
+    color: #999;
+}
+
+.reschedule-info-value {
+    font-size: 14px;
+    color: #333;
+    font-weight: 500;
+}
+
+.reschedule-divider {
+    text-align: center;
+    padding: 8px 0;
+    color: #a0aec0;
+    font-size: 13px;
+}
+
+.reschedule-new-info {
+    background: #fff5f0;
+    padding: 16px;
+    border-radius: 10px;
+    border: 1px solid #fed7aa;
+    margin-bottom: 16px;
+}
+
+.date-item.same-as-old {
+    border: 2px dashed #cbd5e0;
+}
+
+.time-slot.current-slot,
+.time-slot-capacity.current-slot {
+    opacity: 0.6;
+    border: 2px dashed #cbd5e0;
+    cursor: not-allowed;
+    background: #f7fafc;
+}
+
+.query-actions {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+    flex-wrap: wrap;
+    margin-top: 20px;
+}
+
+.query-actions .btn {
+    flex: 1;
+    min-width: 100px;
+}
+
+@media (max-width: 480px) {
+    .reschedule-info-grid {
+        grid-template-columns: 1fr;
+    }
+    
+    .query-actions {
+        flex-direction: column;
+    }
+    
+    .query-actions .btn {
+        width: 100%;
+    }
+}

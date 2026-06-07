@@ -16,6 +16,10 @@ const state = {
     restrictionTotal: 0,
     restrictionPageSize: 20,
     editingRestrictionId: null,
+    reschedules: [],
+    reschedulePage: 1,
+    rescheduleTotal: 0,
+    reschedulePageSize: 20,
     editingItemId: null,
     editingMaterials: [],
     windows: [],
@@ -144,6 +148,7 @@ function switchTab(tab) {
         holidays: '节假日管理',
         reminders: '提醒记录',
         reviews: '评价管理',
+        reschedules: '改期记录',
         restrictions: '手机号限制',
         windows: '窗口管理'
     };
@@ -161,6 +166,8 @@ function switchTab(tab) {
         loadReminders();
     } else if (tab === 'reviews') {
         loadReviews();
+    } else if (tab === 'reschedules') {
+        loadReschedules();
     } else if (tab === 'restrictions') {
         loadRestrictions();
     } else if (tab === 'windows') {
@@ -1203,6 +1210,136 @@ function resetReviewFilters() {
     searchReviews();
 }
 
+async function loadReschedules() {
+    await loadRescheduleItemSelect();
+    await searchReschedules();
+}
+
+async function loadRescheduleItemSelect() {
+    try {
+        if (state.items.length === 0) {
+            const res = await fetch(`${API_BASE}/items`);
+            state.items = await res.json();
+        }
+
+        const select = document.getElementById('filterRescheduleItem');
+        select.innerHTML = '<option value="">全部事项</option>' +
+            state.items.map(item => `<option value="${item.id}">${item.name}</option>`).join('');
+    } catch (e) {
+        console.error('加载事项失败', e);
+    }
+}
+
+async function searchReschedules() {
+    const date = document.getElementById('filterRescheduleDate').value;
+    const itemId = document.getElementById('filterRescheduleItem').value;
+    const phone = document.getElementById('filterReschedulePhone').value.trim();
+
+    let url = `${API_BASE}/reschedules?page=${state.reschedulePage}&page_size=${state.reschedulePageSize}`;
+    if (date) url += `&date=${date}`;
+    if (itemId) url += `&item_id=${itemId}`;
+    if (phone) url += `&phone=${encodeURIComponent(phone)}`;
+
+    try {
+        const res = await fetch(url);
+        const data = await res.json();
+        state.reschedules = data.list;
+        state.rescheduleTotal = data.total;
+        state.reschedulePage = data.page;
+        renderReschedules();
+        renderReschedulePagination(data.total_pages);
+    } catch (e) {
+        document.getElementById('rescheduleList').innerHTML = '<tr><td colspan="10" class="loading">加载失败</td></tr>';
+    }
+}
+
+function renderReschedules() {
+    const tbody = document.getElementById('rescheduleList');
+
+    if (state.reschedules.length === 0) {
+        tbody.innerHTML = `
+            <tr>
+                <td colspan="10" class="empty-state">
+                    <div class="empty-icon">🔄</div>
+                    <p>暂无改期记录</p>
+                </td>
+            </tr>
+        `;
+        return;
+    }
+
+    tbody.innerHTML = state.reschedules.map(r => `
+        <tr>
+            <td>${r.id}</td>
+            <td>${r.appointment_id}</td>
+            <td>${r.item_name || '-'}</td>
+            <td>${r.user_name || '-'}</td>
+            <td>${r.phone || '-'}</td>
+            <td>
+                <div style="font-size:12px;line-height:1.5;">
+                    <div>${r.old_date}</div>
+                    <div style="color:#666;">${r.old_time_slot}</div>
+                    ${r.old_window_name ? `<div style="color:#999;font-size:11px;">${r.old_window_name}</div>` : ''}
+                </div>
+            </td>
+            <td>
+                <div style="font-size:12px;line-height:1.5;color:#2d8a4e;">
+                    <div>${r.new_date}</div>
+                    <div style="color:#2d8a4e;">${r.new_time_slot}</div>
+                    ${r.new_window_name ? `<div style="color:#999;font-size:11px;">${r.new_window_name}</div>` : ''}
+                </div>
+            </td>
+            <td style="max-width:150px;white-space:normal;">${escapeHtml(r.reason) || '<span style="color:#999;">无</span>'}</td>
+            <td>${r.operator_type === 'admin' ? '管理员' : '群众'}<br><span style="color:#999;font-size:11px;">${r.operator_name || '-'}</span></td>
+            <td>${r.created_at ? r.created_at.substring(0, 19) : '-'}</td>
+        </tr>
+    `).join('');
+}
+
+function renderReschedulePagination(totalPages) {
+    const container = document.getElementById('reschedulePagination');
+
+    if (totalPages <= 1) {
+        container.innerHTML = '';
+        return;
+    }
+
+    let html = '<div class="pagination-info">共 ' + state.rescheduleTotal + ' 条记录</div>';
+    html += '<div class="pagination-buttons">';
+
+    if (state.reschedulePage > 1) {
+        html += `<button class="btn btn-sm btn-secondary" onclick="goToReschedulePage(${state.reschedulePage - 1})">上一页</button>`;
+    }
+
+    const startPage = Math.max(1, state.reschedulePage - 2);
+    const endPage = Math.min(totalPages, state.reschedulePage + 2);
+
+    for (let i = startPage; i <= endPage; i++) {
+        const active = i === state.reschedulePage ? 'active' : '';
+        html += `<button class="btn btn-sm ${active ? 'btn-primary' : 'btn-secondary'}" onclick="goToReschedulePage(${i})">${i}</button>`;
+    }
+
+    if (state.reschedulePage < totalPages) {
+        html += `<button class="btn btn-sm btn-secondary" onclick="goToReschedulePage(${state.reschedulePage + 1})">下一页</button>`;
+    }
+
+    html += '</div>';
+    container.innerHTML = html;
+}
+
+function goToReschedulePage(page) {
+    state.reschedulePage = page;
+    searchReschedules();
+}
+
+function resetRescheduleFilters() {
+    document.getElementById('filterRescheduleDate').value = '';
+    document.getElementById('filterRescheduleItem').value = '';
+    document.getElementById('filterReschedulePhone').value = '';
+    state.reschedulePage = 1;
+    searchReschedules();
+}
+
 async function loadRestrictions() {
     await searchRestrictions();
 }
@@ -2039,6 +2176,12 @@ function initModals() {
     });
     document.getElementById('btnResetRestriction').addEventListener('click', resetRestrictionFilters);
 
+    document.getElementById('btnSearchReschedule').addEventListener('click', () => {
+        state.reschedulePage = 1;
+        searchReschedules();
+    });
+    document.getElementById('btnResetReschedule').addEventListener('click', resetRescheduleFilters);
+
     document.querySelectorAll('.modal').forEach(modal => {
         modal.addEventListener('click', (e) => {
             if (e.target === modal) {
@@ -2079,6 +2222,7 @@ window.goToReviewPage = goToReviewPage;
 window.editRestriction = editRestriction;
 window.deleteRestriction = deleteRestriction;
 window.goToRestrictionPage = goToRestrictionPage;
+window.goToReschedulePage = goToReschedulePage;
 window.editWindow = editWindow;
 window.deleteWindow = deleteWindow;
 window.toggleWindowStatus = toggleWindowStatus;
