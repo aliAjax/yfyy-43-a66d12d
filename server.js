@@ -185,6 +185,22 @@ db.exec(`
   );
 
   CREATE INDEX IF NOT EXISTS idx_settings_key ON system_settings(setting_key);
+
+  CREATE TABLE IF NOT EXISTS appointment_material_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    appointment_id INTEGER NOT NULL,
+    material_id INTEGER,
+    material_name TEXT NOT NULL,
+    material_description TEXT,
+    is_required INTEGER NOT NULL DEFAULT 0,
+    require_confirmation INTEGER NOT NULL DEFAULT 0,
+    is_confirmed INTEGER NOT NULL DEFAULT 0,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (appointment_id) REFERENCES appointments(id) ON DELETE CASCADE
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_snapshots_appointment ON appointment_material_snapshots(appointment_id);
 `);
 
 const columns = db.prepare("PRAGMA table_info(items)").all();
@@ -255,6 +271,16 @@ const aptMoreColumns = db.prepare("PRAGMA table_info(appointments)").all();
 const hasNoShowAt = aptMoreColumns.some(c => c.name === 'no_show_at');
 if (!hasNoShowAt) {
   db.exec('ALTER TABLE appointments ADD COLUMN no_show_at DATETIME');
+}
+
+const matColumns = db.prepare("PRAGMA table_info(item_materials)").all();
+const hasIsRequired = matColumns.some(c => c.name === 'is_required');
+if (!hasIsRequired) {
+  db.exec('ALTER TABLE item_materials ADD COLUMN is_required INTEGER NOT NULL DEFAULT 0');
+}
+const hasRequireConfirmation = matColumns.some(c => c.name === 'require_confirmation');
+if (!hasRequireConfirmation) {
+  db.exec('ALTER TABLE item_materials ADD COLUMN require_confirmation INTEGER NOT NULL DEFAULT 0');
 }
 
 function getSystemSetting(key, defaultValue = null) {
@@ -681,7 +707,7 @@ app.get('/api/items/:id/materials', (req, res) => {
 
 app.post('/api/items/:id/materials', (req, res) => {
   const { id } = req.params;
-  const { name, description, sort_order } = req.body;
+  const { name, description, sort_order, is_required, require_confirmation } = req.body;
 
   if (!name || !name.trim()) {
     return res.status(400).json({ error: '材料名称不能为空' });
@@ -693,22 +719,27 @@ app.post('/api/items/:id/materials', (req, res) => {
   }
 
   const order = sort_order !== undefined ? parseInt(sort_order) || 0 : 0;
+  const isRequired = is_required ? 1 : 0;
+  const requireConfirmation = require_confirmation ? 1 : 0;
+
   const result = db.prepare(
-    'INSERT INTO item_materials (item_id, name, description, sort_order) VALUES (?, ?, ?, ?)'
-  ).run(id, name.trim(), description || '', order);
+    'INSERT INTO item_materials (item_id, name, description, sort_order, is_required, require_confirmation) VALUES (?, ?, ?, ?, ?, ?)'
+  ).run(id, name.trim(), description || '', order, isRequired, requireConfirmation);
 
   res.json({
     id: result.lastInsertRowid,
     item_id: parseInt(id),
     name: name.trim(),
     description: description || '',
-    sort_order: order
+    sort_order: order,
+    is_required: isRequired,
+    require_confirmation: requireConfirmation
   });
 });
 
 app.put('/api/materials/:id', (req, res) => {
   const { id } = req.params;
-  const { name, description, sort_order } = req.body;
+  const { name, description, sort_order, is_required, require_confirmation } = req.body;
 
   const material = db.prepare('SELECT * FROM item_materials WHERE id = ?').get(id);
   if (!material) {
@@ -722,17 +753,21 @@ app.put('/api/materials/:id', (req, res) => {
   const newName = name !== undefined ? name.trim() : material.name;
   const newDesc = description !== undefined ? description : material.description;
   const newOrder = sort_order !== undefined ? parseInt(sort_order) || 0 : material.sort_order;
+  const newIsRequired = is_required !== undefined ? (is_required ? 1 : 0) : material.is_required;
+  const newRequireConfirmation = require_confirmation !== undefined ? (require_confirmation ? 1 : 0) : material.require_confirmation;
 
   db.prepare(
-    'UPDATE item_materials SET name = ?, description = ?, sort_order = ? WHERE id = ?'
-  ).run(newName, newDesc, newOrder, id);
+    'UPDATE item_materials SET name = ?, description = ?, sort_order = ?, is_required = ?, require_confirmation = ? WHERE id = ?'
+  ).run(newName, newDesc, newOrder, newIsRequired, newRequireConfirmation, id);
 
   res.json({
     id: parseInt(id),
     item_id: material.item_id,
     name: newName,
     description: newDesc,
-    sort_order: newOrder
+    sort_order: newOrder,
+    is_required: newIsRequired,
+    require_confirmation: newRequireConfirmation
   });
 });
 
@@ -767,10 +802,10 @@ app.put('/api/items/:id/materials/batch', (req, res) => {
   }
 
   const insertStmt = db.prepare(
-    'INSERT INTO item_materials (item_id, name, description, sort_order) VALUES (?, ?, ?, ?)'
+    'INSERT INTO item_materials (item_id, name, description, sort_order, is_required, require_confirmation) VALUES (?, ?, ?, ?, ?, ?)'
   );
   const updateStmt = db.prepare(
-    'UPDATE item_materials SET name = ?, description = ?, sort_order = ? WHERE id = ?'
+    'UPDATE item_materials SET name = ?, description = ?, sort_order = ?, is_required = ?, require_confirmation = ? WHERE id = ?'
   );
   const deleteStmt = db.prepare('DELETE FROM item_materials WHERE id = ?');
 
@@ -780,11 +815,15 @@ app.put('/api/items/:id/materials/batch', (req, res) => {
 
   const tx = db.transaction(() => {
     materials.forEach((mat, index) => {
+      const isRequired = mat.is_required ? 1 : 0;
+      const requireConfirmation = mat.require_confirmation ? 1 : 0;
       if (mat.id && existingIds.has(mat.id)) {
         updateStmt.run(
           mat.name?.trim() || '',
           mat.description || '',
           index,
+          isRequired,
+          requireConfirmation,
           mat.id
         );
         existingIds.delete(mat.id);
@@ -793,7 +832,9 @@ app.put('/api/items/:id/materials/batch', (req, res) => {
           id,
           mat.name?.trim() || '',
           mat.description || '',
-          index
+          index,
+          isRequired,
+          requireConfirmation
         );
       }
     });
@@ -1357,7 +1398,8 @@ function validateAndCreateAppointment({
   time_slot,
   source = 'user',
   operator_name = null,
-  window_id = null
+  window_id = null,
+  material_confirmations = null
 }) {
   if (!item_id || !user_name || !phone || !appointment_date || !time_slot) {
     throw new Error('请填写完整信息');
@@ -1412,6 +1454,27 @@ function validateAndCreateAppointment({
   const activeCount = countActiveAppointments(phone, item_id);
   if (activeCount >= maxActive) {
     throw new Error(`该手机号已有 ${activeCount} 个未完成的${item.name}预约，最多可同时有 ${maxActive} 个未完成预约，请先完成或取消后再预约`);
+  }
+
+  const materials = db.prepare(
+    'SELECT * FROM item_materials WHERE item_id = ? ORDER BY sort_order ASC, id ASC'
+  ).all(item_id);
+
+  let confirmedMaterialMap = {};
+  if (material_confirmations && Array.isArray(material_confirmations)) {
+    material_confirmations.forEach(mc => {
+      confirmedMaterialMap[mc.material_id] = mc.is_confirmed ? 1 : 0;
+    });
+  }
+
+  if (source === 'user') {
+    for (const mat of materials) {
+      if (mat.is_required && mat.require_confirmation) {
+        if (!confirmedMaterialMap[mat.id]) {
+          throw new Error(`请确认必备材料：${mat.name}`);
+        }
+      }
+    }
   }
 
   const timeSlotCaps = db.prepare(`
@@ -1594,6 +1657,23 @@ function validateAndCreateAppointment({
     });
     createReminder(appointmentId, phone, 'created', reminderContent);
 
+    const snapshotStmt = db.prepare(
+      'INSERT INTO appointment_material_snapshots (appointment_id, material_id, material_name, material_description, is_required, require_confirmation, is_confirmed, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+    );
+    materials.forEach((mat, index) => {
+      const isConfirmed = confirmedMaterialMap[mat.id] ? 1 : 0;
+      snapshotStmt.run(
+        appointmentId,
+        mat.id,
+        mat.name,
+        mat.description || '',
+        mat.is_required,
+        mat.require_confirmation,
+        isConfirmed,
+        index
+      );
+    });
+
     return { id: appointmentId, window_id: assignedWindowId, window_name: windowName, queue_number: queueNumber };
   });
 
@@ -1601,7 +1681,7 @@ function validateAndCreateAppointment({
 }
 
 app.post('/api/appointments', (req, res) => {
-  const { item_id, user_name, phone, appointment_date, time_slot } = req.body;
+  const { item_id, user_name, phone, appointment_date, time_slot, material_confirmations } = req.body;
 
   try {
     const result = validateAndCreateAppointment({
@@ -1610,7 +1690,8 @@ app.post('/api/appointments', (req, res) => {
       phone,
       appointment_date,
       time_slot,
-      source: 'user'
+      source: 'user',
+      material_confirmations
     });
 
     res.json({
@@ -1630,7 +1711,7 @@ app.post('/api/appointments', (req, res) => {
 });
 
 app.post('/api/admin/appointments', (req, res) => {
-  const { item_id, user_name, phone, appointment_date, time_slot, window_id, operator_name } = req.body;
+  const { item_id, user_name, phone, appointment_date, time_slot, window_id, operator_name, material_confirmations } = req.body;
 
   try {
     const result = validateAndCreateAppointment({
@@ -1641,7 +1722,8 @@ app.post('/api/admin/appointments', (req, res) => {
       time_slot,
       source: 'admin',
       operator_name: operator_name || '管理员',
-      window_id: window_id ? Number(window_id) : null
+      window_id: window_id ? Number(window_id) : null,
+      material_confirmations
     });
 
     res.json({
@@ -2134,7 +2216,28 @@ app.get('/api/appointments/query', (req, res) => {
     return res.status(404).json({ error: '未找到对应的预约记录，请检查预约编号和手机号' });
   }
 
+  const materialSnapshots = db.prepare(
+    'SELECT * FROM appointment_material_snapshots WHERE appointment_id = ? ORDER BY sort_order ASC, id ASC'
+  ).all(id);
+
+  appointment.material_snapshots = materialSnapshots;
+
   res.json(appointment);
+});
+
+app.get('/api/appointments/:id/material-snapshots', (req, res) => {
+  const { id } = req.params;
+
+  const appointment = db.prepare('SELECT id, phone FROM appointments WHERE id = ?').get(id);
+  if (!appointment) {
+    return res.status(404).json({ error: '预约不存在' });
+  }
+
+  const snapshots = db.prepare(
+    'SELECT * FROM appointment_material_snapshots WHERE appointment_id = ? ORDER BY sort_order ASC, id ASC'
+  ).all(id);
+
+  res.json(snapshots);
 });
 
 app.post('/api/appointments/:id/cancel', (req, res) => {

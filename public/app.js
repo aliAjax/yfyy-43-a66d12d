@@ -2,6 +2,7 @@ const state = {
     items: [],
     selectedItem: null,
     selectedItemMaterials: [],
+    confirmedMaterialIds: new Set(),
     selectedDate: null,
     selectedTimeSlot: null,
     timeSlots: [],
@@ -72,6 +73,7 @@ function renderItems() {
             const id = parseInt(card.dataset.id);
             state.selectedItem = state.items.find(i => i.id === id);
             state.selectedItemMaterials = [];
+            state.confirmedMaterialIds = new Set();
             state.selectedDate = null;
             state.selectedTimeSlot = null;
             state.currentWeekOffset = 0;
@@ -134,15 +136,62 @@ function renderMaterialsBox() {
         return;
     }
 
-    box.innerHTML = state.selectedItemMaterials.map((mat, index) => `
-        <div class="material-item-citizen">
-            <div class="material-index">${index + 1}</div>
-            <div class="material-content">
-                <div class="material-name-citizen">${escapeHtml(mat.name)}</div>
-                ${mat.description ? `<div class="material-desc-citizen">${escapeHtml(mat.description)}</div>` : ''}
+    const hasRequireConfirmation = state.selectedItemMaterials.some(m => m.require_confirmation);
+    const requiredCount = state.selectedItemMaterials.filter(m => m.is_required && m.require_confirmation).length;
+    const confirmedCount = state.selectedItemMaterials.filter(m => m.is_required && m.require_confirmation && state.confirmedMaterialIds.has(m.id)).length;
+
+    let headerHtml = '';
+    if (hasRequireConfirmation) {
+        headerHtml = `
+            <div class="material-confirm-header">
+                <span class="material-confirm-title">📋 材料确认清单</span>
+                <span class="material-confirm-progress">
+                    ${requiredCount > 0 ? `必备材料已确认 ${confirmedCount}/${requiredCount}` : ''}
+                </span>
             </div>
+        `;
+    }
+
+    box.innerHTML = `
+        ${headerHtml}
+        <div class="material-list-citizen">
+            ${state.selectedItemMaterials.map((mat, index) => {
+                const isRequired = mat.is_required;
+                const needConfirm = mat.require_confirmation;
+                const isConfirmed = state.confirmedMaterialIds.has(mat.id);
+                return `
+                    <div class="material-item-citizen ${needConfirm ? 'has-confirm' : ''} ${isRequired ? 'is-required' : 'is-optional'}">
+                        <div class="material-index">${index + 1}</div>
+                        <div class="material-content">
+                            <div class="material-name-row">
+                                <span class="material-name-citizen">${escapeHtml(mat.name)}</span>
+                                ${isRequired ? '<span class="material-tag material-tag-required">必备</span>' : '<span class="material-tag material-tag-optional">可选</span>'}
+                            </div>
+                            ${mat.description ? `<div class="material-desc-citizen">${escapeHtml(mat.description)}</div>` : ''}
+                        </div>
+                        ${needConfirm ? `
+                            <label class="material-checkbox">
+                                <input type="checkbox" class="material-confirm-check" data-material-id="${mat.id}" ${isConfirmed ? 'checked' : ''}>
+                                <span class="material-check-text">${isRequired ? '我已准备好' : '我确认'}</span>
+                            </label>
+                        ` : ''}
+                    </div>
+                `;
+            }).join('')}
         </div>
-    `).join('');
+    `;
+
+    box.querySelectorAll('.material-confirm-check').forEach(checkbox => {
+        checkbox.addEventListener('change', (e) => {
+            const materialId = parseInt(e.target.dataset.materialId);
+            if (e.target.checked) {
+                state.confirmedMaterialIds.add(materialId);
+            } else {
+                state.confirmedMaterialIds.delete(materialId);
+            }
+            renderMaterialsBox();
+        });
+    });
 }
 
 function getWeekDates(offset = 0) {
@@ -479,11 +528,28 @@ function renderBookingSummary() {
         const [start, end] = state.selectedTimeSlot.split('-');
         timeDisplay = `${start} - ${end}`;
     }
+
+    let materialsSummary = '';
+    if (state.selectedItemMaterials.length > 0) {
+        const requiredCount = state.selectedItemMaterials.filter(m => m.is_required).length;
+        const requireConfirmCount = state.selectedItemMaterials.filter(m => m.require_confirmation).length;
+        const confirmedCount = state.selectedItemMaterials.filter(m => m.require_confirmation && state.confirmedMaterialIds.has(m.id)).length;
+        
+        materialsSummary = `
+            <p style="margin-top:8px; padding-top:8px; border-top:1px dashed #eee;">
+                <strong>📋 材料：</strong>
+                共 ${state.selectedItemMaterials.length} 项
+                ${requiredCount > 0 ? `（必备 ${requiredCount} 项）` : ''}
+                ${requireConfirmCount > 0 ? `，已确认 ${confirmedCount}/${requireConfirmCount}` : ''}
+            </p>
+        `;
+    }
     
     summary.innerHTML = `
         <p><strong>办理事项：</strong>${state.selectedItem?.name || ''}</p>
         <p><strong>预约日期：</strong>${state.selectedDate || ''}</p>
         <p><strong>预约时段：</strong>${timeDisplay}</p>
+        ${materialsSummary}
     `;
 }
 
@@ -509,6 +575,22 @@ async function submitBooking() {
         return;
     }
 
+    const requiredMaterials = state.selectedItemMaterials.filter(m => m.is_required && m.require_confirmation);
+    const unconfirmedRequired = requiredMaterials.filter(m => !state.confirmedMaterialIds.has(m.id));
+    if (unconfirmedRequired.length > 0) {
+        showToast(`请确认必备材料：${unconfirmedRequired[0].name}`, 'error');
+        const section = document.getElementById('materialsSection');
+        if (section) {
+            section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+        return;
+    }
+
+    const materialConfirmations = state.selectedItemMaterials.map(m => ({
+        material_id: m.id,
+        is_confirmed: state.confirmedMaterialIds.has(m.id)
+    }));
+
     const submitBtn = document.getElementById('submitBooking');
     submitBtn.disabled = true;
     submitBtn.textContent = '提交中...';
@@ -522,7 +604,8 @@ async function submitBooking() {
                 user_name: userName,
                 phone: userPhone,
                 appointment_date: state.selectedDate,
-                time_slot: state.selectedTimeSlot
+                time_slot: state.selectedTimeSlot,
+                material_confirmations: materialConfirmations
             })
         });
 
@@ -557,15 +640,25 @@ function renderSuccess(appointment) {
     const tips = document.querySelector('.tips');
     let materialsHtml = '';
     if (state.selectedItemMaterials.length > 0) {
+        const hasConfirms = state.selectedItemMaterials.some(m => m.require_confirmation);
         materialsHtml = `
-            <p><strong>📋 所需材料清单：</strong></p>
+            <p><strong>📋 材料确认清单：</strong></p>
             <ul class="material-tips-list">
-                ${state.selectedItemMaterials.map(m => `
-                    <li>
-                        <span class="tip-material-name">${escapeHtml(m.name)}</span>
-                        ${m.description ? `<span class="tip-material-desc">（${escapeHtml(m.description)}）</span>` : ''}
-                    </li>
-                `).join('')}
+                ${state.selectedItemMaterials.map(m => {
+                    const isRequired = m.is_required;
+                    const isConfirmed = state.confirmedMaterialIds.has(m.id);
+                    const needConfirm = m.require_confirmation;
+                    return `
+                        <li class="material-tip-item">
+                            <div class="material-tip-header">
+                                <span class="tip-material-name">${escapeHtml(m.name)}</span>
+                                ${isRequired ? '<span class="material-tag material-tag-required">必备</span>' : '<span class="material-tag material-tag-optional">可选</span>'}
+                                ${needConfirm ? (isConfirmed ? '<span class="material-tag material-tag-confirmed">已确认 ✓</span>' : '<span class="material-tag material-tag-unconfirmed">未确认</span>') : ''}
+                            </div>
+                            ${m.description ? `<div class="tip-material-desc">${escapeHtml(m.description)}</div>` : ''}
+                        </li>
+                    `;
+                }).join('')}
             </ul>
         `;
     }
@@ -606,6 +699,8 @@ async function loadLatestReminder(phone) {
 
 function resetBooking() {
     state.selectedItem = null;
+    state.selectedItemMaterials = [];
+    state.confirmedMaterialIds = new Set();
     state.selectedDate = null;
     state.selectedTimeSlot = null;
     state.currentWeekOffset = 0;
@@ -718,13 +813,7 @@ async function submitQuery() {
         state.currentAppointment = data;
         state.currentReview = null;
 
-        let materials = [];
-        try {
-            const matRes = await fetch(`${API_BASE}/items/${data.item_id}/materials`);
-            materials = await matRes.json();
-        } catch (e) {
-            console.error('加载材料清单失败', e);
-        }
+        const materials = data.material_snapshots || [];
 
         if (data.status === 'completed') {
             try {
@@ -789,14 +878,33 @@ function renderAppointmentDetail(appointment, materials = []) {
 
     const materialsHtml = materials.length > 0 ? `
         <div class="detail-materials">
-            <div class="detail-materials-title">📋 所需材料清单</div>
+            <div class="detail-materials-title">📋 材料确认清单</div>
             <ul class="detail-materials-list">
-                ${materials.map(m => `
-                    <li>
-                        <span class="detail-material-name">${escapeHtml(m.name)}</span>
-                        ${m.description ? `<span class="detail-material-desc">${escapeHtml(m.description)}</span>` : ''}
-                    </li>
-                `).join('')}
+                ${materials.map((m, index) => {
+                    const matName = m.material_name || m.name;
+                    const matDesc = m.material_description !== undefined ? m.material_description : m.description;
+                    const isRequired = m.is_required;
+                    const needConfirm = m.require_confirmation;
+                    const isConfirmed = m.is_confirmed;
+                    return `
+                        <li class="detail-material-item">
+                            <div class="detail-material-header">
+                                <span class="detail-material-index">${index + 1}.</span>
+                                <span class="detail-material-name">${escapeHtml(matName)}</span>
+                                ${isRequired ? '<span class="material-tag material-tag-required">必备</span>' : '<span class="material-tag material-tag-optional">可选</span>'}
+                            </div>
+                            ${matDesc ? `<div class="detail-material-desc">${escapeHtml(matDesc)}</div>` : ''}
+                            ${needConfirm ? `
+                                <div class="detail-material-status">
+                                    ${isConfirmed 
+                                        ? '<span class="material-status-confirmed">✓ 已确认</span>' 
+                                        : '<span class="material-status-unconfirmed">✗ 未确认</span>'
+                                    }
+                                </div>
+                            ` : ''}
+                        </li>
+                    `;
+                }).join('')}
             </ul>
         </div>
     ` : '';

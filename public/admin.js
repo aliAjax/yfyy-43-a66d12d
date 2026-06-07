@@ -880,6 +880,16 @@ function renderMaterialsList() {
             <div class="material-fields">
                 <input type="text" class="material-name" placeholder="材料名称" value="${escapeHtml(mat.name || '')}" data-field="name">
                 <input type="text" class="material-desc" placeholder="材料说明（选填）" value="${escapeHtml(mat.description || '')}" data-field="description">
+                <div class="material-options">
+                    <label class="material-option">
+                        <input type="checkbox" class="material-required" ${mat.is_required ? 'checked' : ''} data-field="is_required">
+                        <span>必备材料</span>
+                    </label>
+                    <label class="material-option">
+                        <input type="checkbox" class="material-confirm" ${mat.require_confirmation ? 'checked' : ''} data-field="require_confirmation">
+                        <span>需群众勾选确认</span>
+                    </label>
+                </div>
             </div>
             <button type="button" class="material-delete" onclick="removeMaterial(${index})">×</button>
         </div>
@@ -887,17 +897,23 @@ function renderMaterialsList() {
 
     container.querySelectorAll('.material-item').forEach(item => {
         const index = parseInt(item.dataset.index);
-        item.querySelectorAll('input').forEach(input => {
+        item.querySelectorAll('input[type="text"]').forEach(input => {
             input.addEventListener('input', (e) => {
                 const field = e.target.dataset.field;
                 state.editingMaterials[index][field] = e.target.value;
+            });
+        });
+        item.querySelectorAll('input[type="checkbox"]').forEach(checkbox => {
+            checkbox.addEventListener('change', (e) => {
+                const field = e.target.dataset.field;
+                state.editingMaterials[index][field] = e.target.checked ? 1 : 0;
             });
         });
     });
 }
 
 function addMaterial() {
-    state.editingMaterials.push({ name: '', description: '' });
+    state.editingMaterials.push({ name: '', description: '', is_required: 0, require_confirmation: 0 });
     renderMaterialsList();
 }
 
