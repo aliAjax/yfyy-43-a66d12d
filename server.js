@@ -206,6 +206,28 @@ if (!hasOperatorName) {
   db.exec('ALTER TABLE appointments ADD COLUMN operator_name TEXT');
 }
 
+const itemColumns = db.prepare("PRAGMA table_info(items)").all();
+const hasAdvanceWeeks = itemColumns.some(c => c.name === 'advance_weeks');
+if (!hasAdvanceWeeks) {
+  db.exec('ALTER TABLE items ADD COLUMN advance_weeks INTEGER');
+}
+const hasAllowSameDay = itemColumns.some(c => c.name === 'allow_same_day');
+if (!hasAllowSameDay) {
+  db.exec('ALTER TABLE items ADD COLUMN allow_same_day INTEGER');
+}
+const hasCancelDeadlineHours = itemColumns.some(c => c.name === 'cancel_deadline_hours');
+if (!hasCancelDeadlineHours) {
+  db.exec('ALTER TABLE items ADD COLUMN cancel_deadline_hours INTEGER');
+}
+const hasRescheduleDeadlineHours = itemColumns.some(c => c.name === 'reschedule_deadline_hours');
+if (!hasRescheduleDeadlineHours) {
+  db.exec('ALTER TABLE items ADD COLUMN reschedule_deadline_hours INTEGER');
+}
+const hasMaxActiveAppointments = itemColumns.some(c => c.name === 'max_active_appointments');
+if (!hasMaxActiveAppointments) {
+  db.exec('ALTER TABLE items ADD COLUMN max_active_appointments INTEGER');
+}
+
 db.prepare("UPDATE appointment_reminders SET send_status = 'simulated' WHERE send_status = 'sent'").run();
 
 function initDefaultData() {
@@ -317,30 +339,190 @@ function isWorkday(dateStr) {
   return true;
 }
 
+function getAppointmentStartTime(timeSlot) {
+  if (!timeSlot) return '09:00';
+  const parts = timeSlot.split('-');
+  return parts[0] || '09:00';
+}
+
+function getMaxAdvanceDate(item) {
+  const weeks = item.advance_weeks || 4;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const maxDate = new Date(today);
+  maxDate.setDate(today.getDate() + weeks * 7 - 1);
+  return maxDate;
+}
+
+function isDateWithinAdvanceWeeks(dateStr, item) {
+  const date = new Date(dateStr);
+  date.setHours(0, 0, 0, 0);
+  const maxDate = getMaxAdvanceDate(item);
+  maxDate.setHours(23, 59, 59, 999);
+  return date <= maxDate;
+}
+
+function isSameDayBookingAllowed(item) {
+  if (item.allow_same_day === null || item.allow_same_day === undefined) {
+    return true;
+  }
+  return item.allow_same_day === 1;
+}
+
+function getAppointmentDateTime(dateStr, timeSlot) {
+  const startTime = getAppointmentStartTime(timeSlot);
+  const [hours, minutes] = startTime.split(':').map(Number);
+  const date = new Date(dateStr);
+  date.setHours(hours, minutes, 0, 0);
+  return date;
+}
+
+function isCancellationAllowed(appointment, item) {
+  if (appointment.status !== 'pending') return false;
+
+  const deadlineHours = item.cancel_deadline_hours;
+  if (deadlineHours === null || deadlineHours === undefined) {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const aptDate = new Date(appointment.appointment_date);
+    aptDate.setHours(0, 0, 0, 0);
+    return aptDate >= today;
+  }
+
+  const aptDateTime = getAppointmentDateTime(appointment.appointment_date, appointment.time_slot);
+  const now = new Date();
+  const deadline = new Date(aptDateTime.getTime() - deadlineHours * 60 * 60 * 1000);
+  return now <= deadline;
+}
+
+function isReschedulingAllowed(appointment, item) {
+  if (appointment.status !== 'pending') return false;
+
+  const deadlineHours = item.reschedule_deadline_hours;
+  if (deadlineHours === null || deadlineHours === undefined) {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const aptDate = new Date(appointment.appointment_date);
+    aptDate.setHours(0, 0, 0, 0);
+    return aptDate > today;
+  }
+
+  const aptDateTime = getAppointmentDateTime(appointment.appointment_date, appointment.time_slot);
+  const now = new Date();
+  const deadline = new Date(aptDateTime.getTime() - deadlineHours * 60 * 60 * 1000);
+  return now <= deadline;
+}
+
+function getMaxActiveAppointments(item) {
+  return item.max_active_appointments || 1;
+}
+
+function countActiveAppointments(phone, itemId) {
+  return db.prepare(
+    `SELECT COUNT(*) as cnt FROM appointments 
+     WHERE phone = ? AND item_id = ? AND status IN ('pending', 'arrived', 'calling')`
+  ).get(phone, itemId).cnt;
+}
+
 app.get('/api/items', (req, res) => {
   const items = db.prepare('SELECT * FROM items ORDER BY id').all();
   res.json(items);
 });
 
 app.post('/api/items', (req, res) => {
-  const { name, description, default_max_count } = req.body;
+  const { name, description, default_max_count, advance_weeks, allow_same_day, cancel_deadline_hours, reschedule_deadline_hours, max_active_appointments } = req.body;
   if (!name) {
     return res.status(400).json({ error: '事项名称不能为空' });
   }
   const maxCount = default_max_count && default_max_count > 0 ? parseInt(default_max_count) : 20;
-  const result = db.prepare('INSERT INTO items (name, description, default_max_count) VALUES (?, ?, ?)').run(name, description || '', maxCount);
-  res.json({ id: result.lastInsertRowid, name, description: description || '', default_max_count: maxCount });
+  const advanceWeeks = advance_weeks !== undefined && advance_weeks !== '' ? parseInt(advance_weeks) : null;
+  const allowSameDay = allow_same_day !== undefined && allow_same_day !== '' ? (allow_same_day ? 1 : 0) : null;
+  const cancelDeadlineHours = cancel_deadline_hours !== undefined && cancel_deadline_hours !== '' ? parseInt(cancel_deadline_hours) : null;
+  const rescheduleDeadlineHours = reschedule_deadline_hours !== undefined && reschedule_deadline_hours !== '' ? parseInt(reschedule_deadline_hours) : null;
+  const maxActiveAppointments = max_active_appointments !== undefined && max_active_appointments !== '' ? parseInt(max_active_appointments) : null;
+
+  if (advanceWeeks !== null && advanceWeeks < 1) {
+    return res.status(400).json({ error: '提前预约周数不能小于1' });
+  }
+  if (cancelDeadlineHours !== null && cancelDeadlineHours < 0) {
+    return res.status(400).json({ error: '取消截止小时数不能小于0' });
+  }
+  if (rescheduleDeadlineHours !== null && rescheduleDeadlineHours < 0) {
+    return res.status(400).json({ error: '改期截止小时数不能小于0' });
+  }
+  if (maxActiveAppointments !== null && maxActiveAppointments < 1) {
+    return res.status(400).json({ error: '未完成预约上限不能小于1' });
+  }
+
+  const result = db.prepare(
+    'INSERT INTO items (name, description, default_max_count, advance_weeks, allow_same_day, cancel_deadline_hours, reschedule_deadline_hours, max_active_appointments) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run(name, description || '', maxCount, advanceWeeks, allowSameDay, cancelDeadlineHours, rescheduleDeadlineHours, maxActiveAppointments);
+  res.json({
+    id: result.lastInsertRowid,
+    name,
+    description: description || '',
+    default_max_count: maxCount,
+    advance_weeks: advanceWeeks,
+    allow_same_day: allowSameDay,
+    cancel_deadline_hours: cancelDeadlineHours,
+    reschedule_deadline_hours: rescheduleDeadlineHours,
+    max_active_appointments: maxActiveAppointments
+  });
 });
+
+function parseNullableInt(value, fallback) {
+  if (value === undefined) return fallback;
+  if (value === null || value === '') return null;
+  const parsed = parseInt(value);
+  return isNaN(parsed) ? null : parsed;
+}
 
 app.put('/api/items/:id', (req, res) => {
   const { id } = req.params;
-  const { name, description, default_max_count } = req.body;
+  const { name, description, default_max_count, advance_weeks, allow_same_day, cancel_deadline_hours, reschedule_deadline_hours, max_active_appointments } = req.body;
   if (!name) {
     return res.status(400).json({ error: '事项名称不能为空' });
   }
-  const maxCount = default_max_count && default_max_count > 0 ? parseInt(default_max_count) : 20;
-  db.prepare('UPDATE items SET name = ?, description = ?, default_max_count = ? WHERE id = ?').run(name, description || '', maxCount, id);
-  res.json({ id: parseInt(id), name, description: description || '', default_max_count: maxCount });
+
+  const item = db.prepare('SELECT * FROM items WHERE id = ?').get(id);
+  if (!item) {
+    return res.status(404).json({ error: '事项不存在' });
+  }
+
+  const maxCount = default_max_count !== undefined ? (default_max_count > 0 ? parseInt(default_max_count) : 20) : item.default_max_count;
+  const advanceWeeks = parseNullableInt(advance_weeks, item.advance_weeks);
+  const allowSameDay = allow_same_day !== undefined ? (allow_same_day ? 1 : 0) : item.allow_same_day;
+  const cancelDeadlineHours = parseNullableInt(cancel_deadline_hours, item.cancel_deadline_hours);
+  const rescheduleDeadlineHours = parseNullableInt(reschedule_deadline_hours, item.reschedule_deadline_hours);
+  const maxActiveAppointments = parseNullableInt(max_active_appointments, item.max_active_appointments);
+
+  if (advanceWeeks !== null && advanceWeeks < 1) {
+    return res.status(400).json({ error: '提前预约周数不能小于1' });
+  }
+  if (cancelDeadlineHours !== null && cancelDeadlineHours < 0) {
+    return res.status(400).json({ error: '取消截止小时数不能小于0' });
+  }
+  if (rescheduleDeadlineHours !== null && rescheduleDeadlineHours < 0) {
+    return res.status(400).json({ error: '改期截止小时数不能小于0' });
+  }
+  if (maxActiveAppointments !== null && maxActiveAppointments < 1) {
+    return res.status(400).json({ error: '未完成预约上限不能小于1' });
+  }
+
+  db.prepare(
+    'UPDATE items SET name = ?, description = ?, default_max_count = ?, advance_weeks = ?, allow_same_day = ?, cancel_deadline_hours = ?, reschedule_deadline_hours = ?, max_active_appointments = ? WHERE id = ?'
+  ).run(name, description || '', maxCount, advanceWeeks, allowSameDay, cancelDeadlineHours, rescheduleDeadlineHours, maxActiveAppointments, id);
+  res.json({
+    id: parseInt(id),
+    name,
+    description: description || '',
+    default_max_count: maxCount,
+    advance_weeks: advanceWeeks,
+    allow_same_day: allowSameDay,
+    cancel_deadline_hours: cancelDeadlineHours,
+    reschedule_deadline_hours: rescheduleDeadlineHours,
+    max_active_appointments: maxActiveAppointments
+  });
 });
 
 app.delete('/api/items/:id', (req, res) => {
@@ -753,17 +935,28 @@ app.get('/api/slots/:itemId/:date', (req, res) => {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
+  const item = db.prepare('SELECT * FROM items WHERE id = ?').get(itemId);
+  if (!item) {
+    return res.status(404).json({ error: '事项不存在' });
+  }
+
   if (dateObj < today) {
     return res.json({ available: false, reason: '不能预约过去的日期' });
   }
 
-  if (!isWorkday(date)) {
-    return res.json({ available: false, reason: '该日期为节假日或周末，不可预约' });
+  const isToday = dateObj.getTime() === today.getTime();
+  if (isToday && !isSameDayBookingAllowed(item)) {
+    return res.json({ available: false, reason: '该事项不支持当天预约' });
   }
 
-  const item = db.prepare('SELECT * FROM items WHERE id = ?').get(itemId);
-  if (!item) {
-    return res.status(404).json({ error: '事项不存在' });
+  if (!isDateWithinAdvanceWeeks(date, item)) {
+    const maxDate = getMaxAdvanceDate(item);
+    const maxDateStr = maxDate.toISOString().split('T')[0];
+    return res.json({ available: false, reason: `超出可预约范围，最远可预约至 ${maxDateStr}` });
+  }
+
+  if (!isWorkday(date)) {
+    return res.json({ available: false, reason: '该日期为节假日或周末，不可预约' });
   }
 
   const timeSlotCaps = db.prepare(`
@@ -1056,24 +1249,30 @@ function validateAndCreateAppointment({
     throw new Error('不能预约过去的日期');
   }
 
-  if (!isWorkday(appointment_date)) {
-    throw new Error('该日期不可预约');
-  }
-
   const item = db.prepare('SELECT * FROM items WHERE id = ?').get(item_id);
   if (!item) {
     throw new Error('事项不存在');
   }
 
-  const existingActive = db.prepare(
-    `SELECT id, appointment_date FROM appointments 
-     WHERE phone = ? AND item_id = ? AND status IN ('pending', 'arrived', 'calling')
-     ORDER BY appointment_date ASC
-     LIMIT 1`
-  ).get(phone, item_id);
+  const isToday = dateObj.getTime() === today.getTime();
+  if (isToday && !isSameDayBookingAllowed(item)) {
+    throw new Error('该事项不支持当天预约');
+  }
 
-  if (existingActive) {
-    throw new Error(`该手机号已有未完成的${item.name}预约（${existingActive.appointment_date}），请先完成或取消后再预约`);
+  if (!isDateWithinAdvanceWeeks(appointment_date, item)) {
+    const maxDate = getMaxAdvanceDate(item);
+    const maxDateStr = maxDate.toISOString().split('T')[0];
+    throw new Error(`超出可预约范围，最远可预约至 ${maxDateStr}`);
+  }
+
+  if (!isWorkday(appointment_date)) {
+    throw new Error('该日期不可预约');
+  }
+
+  const maxActive = getMaxActiveAppointments(item);
+  const activeCount = countActiveAppointments(phone, item_id);
+  if (activeCount >= maxActive) {
+    throw new Error(`该手机号已有 ${activeCount} 个未完成的${item.name}预约，最多可同时有 ${maxActive} 个未完成预约，请先完成或取消后再预约`);
   }
 
   const timeSlotCaps = db.prepare(`
@@ -1404,10 +1603,12 @@ app.post('/api/appointments/:id/cancel', (req, res) => {
     return res.status(400).json({ error: '只有待办理状态的预约才能取消' });
   }
 
-  const appointmentDate = new Date(appointment.appointment_date);
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  if (appointmentDate < today) {
+  const item = db.prepare('SELECT * FROM items WHERE id = ?').get(appointment.item_id);
+  if (!isCancellationAllowed(appointment, item)) {
+    const deadlineHours = item.cancel_deadline_hours;
+    if (deadlineHours !== null && deadlineHours !== undefined) {
+      return res.status(400).json({ error: `已超过取消截止时间（预约前 ${deadlineHours} 小时内不可取消）` });
+    }
     return res.status(400).json({ error: '已过期的预约不能取消' });
   }
 
@@ -1441,7 +1642,6 @@ app.post('/api/appointments/:id/cancel', (req, res) => {
     ).run(appointment.item_id, appointment.appointment_date);
   }
 
-  const item = db.prepare('SELECT name FROM items WHERE id = ?').get(appointment.item_id);
   const window = appointment.window_id ? 
     db.prepare('SELECT name FROM windows WHERE id = ?').get(appointment.window_id) : null;
   const reminderContent = generateReminderContent('cancelled', {
@@ -2639,6 +2839,19 @@ app.post('/api/appointments/:id/reschedule', (req, res) => {
     return res.status(400).json({ error: '只有待办理状态的预约才能改期' });
   }
 
+  const item = db.prepare('SELECT * FROM items WHERE id = ?').get(appointment.item_id);
+  if (!item) {
+    return res.status(400).json({ error: '事项不存在' });
+  }
+
+  if (!isReschedulingAllowed(appointment, item)) {
+    const deadlineHours = item.reschedule_deadline_hours;
+    if (deadlineHours !== null && deadlineHours !== undefined) {
+      return res.status(400).json({ error: `已超过改期截止时间（预约前 ${deadlineHours} 小时内不可改期）` });
+    }
+    return res.status(400).json({ error: '已过期的预约不能改期' });
+  }
+
   function getLocalDateStr(d) {
     const year = d.getFullYear();
     const month = String(d.getMonth() + 1).padStart(2, '0');
@@ -2647,13 +2860,24 @@ app.post('/api/appointments/:id/reschedule', (req, res) => {
   }
   
   const todayStr = getLocalDateStr(new Date());
-  
-  if (appointment.appointment_date < todayStr) {
-    return res.status(400).json({ error: '已过期的预约不能改期' });
+  const newDateObj = new Date(new_date);
+  newDateObj.setHours(0, 0, 0, 0);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const isNewDateToday = newDateObj.getTime() === today.getTime();
+
+  if (new_date < todayStr) {
+    return res.status(400).json({ error: '不能改期到过去的日期' });
   }
-  
-  if (new_date <= todayStr) {
-    return res.status(400).json({ error: '只能改期到未来的工作日' });
+
+  if (isNewDateToday && !isSameDayBookingAllowed(item)) {
+    return res.status(400).json({ error: '该事项不支持当天预约' });
+  }
+
+  if (!isDateWithinAdvanceWeeks(new_date, item)) {
+    const maxDate = getMaxAdvanceDate(item);
+    const maxDateStr = maxDate.toISOString().split('T')[0];
+    return res.status(400).json({ error: `超出可预约范围，最远可预约至 ${maxDateStr}` });
   }
 
   if (!isWorkday(new_date)) {
@@ -2662,11 +2886,6 @@ app.post('/api/appointments/:id/reschedule', (req, res) => {
 
   if (new_date === appointment.appointment_date && new_time_slot === appointment.time_slot) {
     return res.status(400).json({ error: '新时段与原时段相同，无需改期' });
-  }
-
-  const item = db.prepare('SELECT * FROM items WHERE id = ?').get(appointment.item_id);
-  if (!item) {
-    return res.status(400).json({ error: '事项不存在' });
   }
 
   const timeSlotCaps = db.prepare(`

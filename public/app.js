@@ -72,6 +72,9 @@ function renderItems() {
             const id = parseInt(card.dataset.id);
             state.selectedItem = state.items.find(i => i.id === id);
             state.selectedItemMaterials = [];
+            state.selectedDate = null;
+            state.selectedTimeSlot = null;
+            state.currentWeekOffset = 0;
             renderItems();
 
             try {
@@ -164,6 +167,112 @@ function formatDate(date) {
     return `${year}-${month}-${day}`;
 }
 
+function getItemById(itemId) {
+    return state.items.find(i => i.id === parseInt(itemId));
+}
+
+function getMaxAdvanceWeeks(item) {
+    if (!item || item.advance_weeks === null || item.advance_weeks === undefined || item.advance_weeks === '') {
+        return 4;
+    }
+    return parseInt(item.advance_weeks) || 4;
+}
+
+function isSameDayBookingAllowed(item) {
+    if (!item || item.allow_same_day === null || item.allow_same_day === undefined) {
+        return true;
+    }
+    return item.allow_same_day === 1;
+}
+
+function getMaxAdvanceDate(item) {
+    const weeks = getMaxAdvanceWeeks(item);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const maxDate = new Date(today);
+    maxDate.setDate(today.getDate() + weeks * 7 - 1);
+    return maxDate;
+}
+
+function getWeekMonday(date) {
+    const d = new Date(date);
+    d.setHours(0, 0, 0, 0);
+    const day = d.getDay();
+    const diff = d.getDate() - day + (day === 0 ? -6 : 1);
+    d.setDate(diff);
+    return d;
+}
+
+function getMaxWeekOffset(item) {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const thisWeekMonday = getWeekMonday(today);
+    const maxDate = getMaxAdvanceDate(item);
+    const maxWeekMonday = getWeekMonday(maxDate);
+    const diffDays = Math.floor((maxWeekMonday - thisWeekMonday) / (24 * 60 * 60 * 1000));
+    return Math.floor(diffDays / 7);
+}
+
+function isDateWithinAdvanceWeeks(dateStr, item) {
+    const date = new Date(dateStr);
+    date.setHours(0, 0, 0, 0);
+    const maxDate = getMaxAdvanceDate(item);
+    maxDate.setHours(23, 59, 59, 999);
+    return date <= maxDate;
+}
+
+function getAppointmentStartTime(timeSlot) {
+    if (!timeSlot) return '09:00';
+    const parts = timeSlot.split('-');
+    return parts[0] || '09:00';
+}
+
+function getAppointmentDateTime(dateStr, timeSlot) {
+    const startTime = getAppointmentStartTime(timeSlot);
+    const [hours, minutes] = startTime.split(':').map(Number);
+    const date = new Date(dateStr);
+    date.setHours(hours, minutes, 0, 0);
+    return date;
+}
+
+function isCancellationAllowed(appointment, item) {
+    if (!appointment || appointment.status !== 'pending') return false;
+    if (!item) return true;
+
+    const deadlineHours = item.cancel_deadline_hours;
+    if (deadlineHours === null || deadlineHours === undefined || deadlineHours === '') {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const aptDate = new Date(appointment.appointment_date);
+        aptDate.setHours(0, 0, 0, 0);
+        return aptDate >= today;
+    }
+
+    const aptDateTime = getAppointmentDateTime(appointment.appointment_date, appointment.time_slot);
+    const now = new Date();
+    const deadline = new Date(aptDateTime.getTime() - parseInt(deadlineHours) * 60 * 60 * 1000);
+    return now <= deadline;
+}
+
+function isReschedulingAllowed(appointment, item) {
+    if (!appointment || appointment.status !== 'pending') return false;
+    if (!item) return true;
+
+    const deadlineHours = item.reschedule_deadline_hours;
+    if (deadlineHours === null || deadlineHours === undefined || deadlineHours === '') {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const aptDate = new Date(appointment.appointment_date);
+        aptDate.setHours(0, 0, 0, 0);
+        return aptDate > today;
+    }
+
+    const aptDateTime = getAppointmentDateTime(appointment.appointment_date, appointment.time_slot);
+    const now = new Date();
+    const deadline = new Date(aptDateTime.getTime() - parseInt(deadlineHours) * 60 * 60 * 1000);
+    return now <= deadline;
+}
+
 function renderDateGrid() {
     const dates = getWeekDates(state.currentWeekOffset);
     const weekStart = formatDate(dates[0]);
@@ -174,22 +283,35 @@ function renderDateGrid() {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
+    const item = state.selectedItem;
+    const sameDayAllowed = isSameDayBookingAllowed(item);
+    const maxAdvanceDate = getMaxAdvanceDate(item);
+
     const container = document.getElementById('dateGrid');
     container.innerHTML = dates.map(date => {
         const dateStr = formatDate(date);
         const isPast = date < today;
+        const isToday = date.getTime() === today.getTime();
         const isWeekend = date.getDay() === 0 || date.getDay() === 6;
-        const isToday = formatDate(date) === formatDate(today);
         const isSelected = state.selectedDate === dateStr;
+        const isBeyondMax = date > maxAdvanceDate;
+        const isSameDayDisabled = isToday && !sameDayAllowed;
+
+        let disabled = isPast || isWeekend || isBeyondMax || isSameDayDisabled;
 
         let classes = 'date-item';
-        if (isPast) classes += ' disabled';
-        if (isWeekend) classes += ' disabled';
+        if (disabled) classes += ' disabled';
         if (isToday) classes += ' today';
         if (isSelected) classes += ' selected';
 
+        let title = '';
+        if (isSameDayDisabled) title = '该事项不支持当天预约';
+        if (isBeyondMax) title = '超出可预约范围';
+        if (isWeekend) title = '周末不可预约';
+        if (isPast) title = '过去的日期不可预约';
+
         return `
-            <div class="${classes}" data-date="${dateStr}">
+            <div class="${classes}" data-date="${dateStr}" title="${title}">
                 <span class="date-day">${isToday ? '今天' : '周' + dayNames[date.getDay()]}</span>
                 <span class="date-num">${date.getDate()}</span>
             </div>
@@ -205,8 +327,29 @@ function renderDateGrid() {
         });
     });
 
+    updateNavButtons();
+
     if (state.selectedDate) {
         loadTimeSlots();
+    }
+}
+
+function updateNavButtons() {
+    const item = state.selectedItem;
+    const maxOffset = getMaxWeekOffset(item);
+
+    const prevBtn = document.getElementById('prevWeek');
+    const nextBtn = document.getElementById('nextWeek');
+
+    if (prevBtn) {
+        prevBtn.disabled = state.currentWeekOffset <= 0;
+        prevBtn.style.opacity = state.currentWeekOffset <= 0 ? '0.5' : '1';
+        prevBtn.style.cursor = state.currentWeekOffset <= 0 ? 'not-allowed' : 'pointer';
+    }
+    if (nextBtn) {
+        nextBtn.disabled = state.currentWeekOffset >= maxOffset;
+        nextBtn.style.opacity = state.currentWeekOffset >= maxOffset ? '0.5' : '1';
+        nextBtn.style.cursor = state.currentWeekOffset >= maxOffset ? 'not-allowed' : 'pointer';
     }
 }
 
@@ -475,7 +618,8 @@ function initEvents() {
     });
 
     document.getElementById('nextWeek').addEventListener('click', () => {
-        if (state.currentWeekOffset < 4) {
+        const maxOffset = getMaxWeekOffset(state.selectedItem);
+        if (state.currentWeekOffset < maxOffset) {
             state.currentWeekOffset++;
             renderDateGrid();
         }
@@ -600,9 +744,38 @@ async function submitQuery() {
 function renderAppointmentDetail(appointment, materials = []) {
     const statusText = getStatusText(appointment.status);
     const statusClass = getStatusClass(appointment.status);
-    const canCancel = appointment.status === 'pending';
-    const canReschedule = appointment.status === 'pending';
+
+    const item = getItemById(appointment.item_id);
+    const canCancel = isCancellationAllowed(appointment, item);
+    const canReschedule = isReschedulingAllowed(appointment, item);
     const canReview = appointment.status === 'completed' && !state.currentReview;
+
+    let cancelTip = '';
+    let rescheduleTip = '';
+
+    if (appointment.status === 'pending') {
+        if (!canCancel) {
+            const deadlineHours = item?.cancel_deadline_hours;
+            if (deadlineHours !== null && deadlineHours !== undefined && deadlineHours !== '') {
+                cancelTip = `<div class="detail-tip detail-tip-muted">⏰ 已超过取消截止时间（预约前 ${deadlineHours} 小时内不可取消）</div>`;
+            } else {
+                cancelTip = `<div class="detail-tip detail-tip-muted">⏰ 已超过取消时间</div>`;
+            }
+        } else {
+            cancelTip = `<div class="detail-tip">💡 您可以在线取消预约</div>`;
+        }
+
+        if (!canReschedule) {
+            const deadlineHours = item?.reschedule_deadline_hours;
+            if (deadlineHours !== null && deadlineHours !== undefined && deadlineHours !== '') {
+                rescheduleTip = `<div class="detail-tip detail-tip-muted">⏰ 已超过改期截止时间（预约前 ${deadlineHours} 小时内不可改期）</div>`;
+            } else {
+                rescheduleTip = `<div class="detail-tip detail-tip-muted">⏰ 已超过改期时间</div>`;
+            }
+        } else {
+            rescheduleTip = `<div class="detail-tip">💡 您可以在线改期</div>`;
+        }
+    }
 
     const materialsHtml = materials.length > 0 ? `
         <div class="detail-materials">
@@ -680,8 +853,8 @@ function renderAppointmentDetail(appointment, materials = []) {
             </div>
             ${reviewHtml}
         </div>
-        ${canReschedule ? '<div class="detail-tip">💡 该预约处于待办理状态，您可以在线改期</div>' : ''}
-        ${canCancel ? '<div class="detail-tip">💡 该预约处于待办理状态，您可以在线取消</div>' : ''}
+        ${rescheduleTip}
+        ${cancelTip}
         ${appointment.status === 'cancelled' ? '<div class="detail-tip detail-tip-muted">该预约已取消，号源已释放</div>' : ''}
         ${appointment.status === 'completed' && !state.currentReview ? '<div class="detail-tip">⭐ 您已完成办理，点击下方按钮进行满意度评价</div>' : ''}
         ${appointment.status === 'arrived' ? '<div class="detail-tip detail-tip-muted">该预约已签到，请到窗口办理</div>' : ''}
@@ -966,24 +1139,38 @@ function renderRescheduleDateGrid() {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
+    const item = state.currentAppointment ? getItemById(state.currentAppointment.item_id) : null;
+    const sameDayAllowed = isSameDayBookingAllowed(item);
+    const maxAdvanceDate = getMaxAdvanceDate(item);
+
     const container = document.getElementById('rescheduleDateGrid');
     container.innerHTML = dates.map(date => {
         const dateStr = formatDate(date);
-        const isPastOrToday = date <= today;
+        const isPast = date < today;
+        const isToday = date.getTime() === today.getTime();
         const isWeekend = date.getDay() === 0 || date.getDay() === 6;
-        const isToday = formatDate(date) === formatDate(today);
         const isSelected = state.reschedule.selectedDate === dateStr;
         const isSameAsOld = state.currentAppointment && dateStr === state.currentAppointment.appointment_date;
+        const isBeyondMax = date > maxAdvanceDate;
+        const isSameDayDisabled = isToday && !sameDayAllowed;
+
+        let disabled = isPast || isWeekend || isBeyondMax || isSameDayDisabled || isSameAsOld;
 
         let classes = 'date-item';
-        if (isPastOrToday) classes += ' disabled';
-        if (isWeekend) classes += ' disabled';
+        if (disabled) classes += ' disabled';
         if (isToday) classes += ' today';
         if (isSelected) classes += ' selected';
         if (isSameAsOld) classes += ' same-as-old';
 
+        let title = '';
+        if (isSameAsOld) title = '当前预约日期';
+        else if (isSameDayDisabled) title = '该事项不支持当天预约';
+        else if (isBeyondMax) title = '超出可预约范围';
+        else if (isWeekend) title = '周末不可预约';
+        else if (isPast) title = '过去的日期不可预约';
+
         return `
-            <div class="${classes}" data-date="${dateStr}" title="${isSameAsOld ? '当前预约日期' : ''}">
+            <div class="${classes}" data-date="${dateStr}" title="${title}">
                 <span class="date-day">${isToday ? '今天' : '周' + dayNames[date.getDay()]}</span>
                 <span class="date-num">${date.getDate()}</span>
             </div>
@@ -1002,16 +1189,37 @@ function renderRescheduleDateGrid() {
 
     if (state.reschedule.selectedDate) {
         const selectedDateObj = new Date(state.reschedule.selectedDate);
-        if (selectedDateObj <= today) {
+        if (selectedDateObj < today) {
             state.reschedule.selectedDate = null;
             state.reschedule.selectedTimeSlot = null;
         }
     }
 
+    updateRescheduleNavButtons();
+
     if (state.reschedule.selectedDate) {
         loadRescheduleTimeSlots();
     }
     updateRescheduleConfirmBtn();
+}
+
+function updateRescheduleNavButtons() {
+    const item = state.currentAppointment ? getItemById(state.currentAppointment.item_id) : null;
+    const maxOffset = getMaxWeekOffset(item);
+
+    const prevBtn = document.getElementById('reschedulePrevWeek');
+    const nextBtn = document.getElementById('rescheduleNextWeek');
+
+    if (prevBtn) {
+        prevBtn.disabled = state.reschedule.weekOffset <= 0;
+        prevBtn.style.opacity = state.reschedule.weekOffset <= 0 ? '0.5' : '1';
+        prevBtn.style.cursor = state.reschedule.weekOffset <= 0 ? 'not-allowed' : 'pointer';
+    }
+    if (nextBtn) {
+        nextBtn.disabled = state.reschedule.weekOffset >= maxOffset;
+        nextBtn.style.opacity = state.reschedule.weekOffset >= maxOffset ? '0.5' : '1';
+        nextBtn.style.cursor = state.reschedule.weekOffset >= maxOffset ? 'not-allowed' : 'pointer';
+    }
 }
 
 async function loadRescheduleTimeSlots() {
@@ -1246,7 +1454,9 @@ function initRescheduleEvents() {
     });
 
     document.getElementById('rescheduleNextWeek').addEventListener('click', () => {
-        if (state.reschedule.weekOffset < 4) {
+        const item = state.currentAppointment ? getItemById(state.currentAppointment.item_id) : null;
+        const maxOffset = getMaxWeekOffset(item);
+        if (state.reschedule.weekOffset < maxOffset) {
             state.reschedule.weekOffset++;
             renderRescheduleDateGrid();
         }

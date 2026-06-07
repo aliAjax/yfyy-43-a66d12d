@@ -498,6 +498,11 @@ function openAddItemModal() {
     document.getElementById('itemName').value = '';
     document.getElementById('itemDesc').value = '';
     document.getElementById('itemMaxCount').value = 20;
+    document.getElementById('itemAdvanceWeeks').value = '';
+    document.getElementById('itemAllowSameDay').checked = false;
+    document.getElementById('itemCancelDeadline').value = '';
+    document.getElementById('itemRescheduleDeadline').value = '';
+    document.getElementById('itemMaxActive').value = '';
     renderMaterialsList();
     renderWindowConfigList();
     document.getElementById('itemModal').classList.add('show');
@@ -512,6 +517,11 @@ async function editItem(id) {
     document.getElementById('itemName').value = item.name;
     document.getElementById('itemDesc').value = item.description || '';
     document.getElementById('itemMaxCount').value = item.default_max_count || 20;
+    document.getElementById('itemAdvanceWeeks').value = item.advance_weeks !== null && item.advance_weeks !== undefined ? item.advance_weeks : '';
+    document.getElementById('itemAllowSameDay').checked = item.allow_same_day === 1;
+    document.getElementById('itemCancelDeadline').value = item.cancel_deadline_hours !== null && item.cancel_deadline_hours !== undefined ? item.cancel_deadline_hours : '';
+    document.getElementById('itemRescheduleDeadline').value = item.reschedule_deadline_hours !== null && item.reschedule_deadline_hours !== undefined ? item.reschedule_deadline_hours : '';
+    document.getElementById('itemMaxActive').value = item.max_active_appointments !== null && item.max_active_appointments !== undefined ? item.max_active_appointments : '';
 
     try {
         const res = await fetch(`${API_BASE}/items/${id}/materials`);
@@ -547,6 +557,11 @@ async function saveItem() {
     const name = document.getElementById('itemName').value.trim();
     const description = document.getElementById('itemDesc').value.trim();
     const defaultMaxCount = document.getElementById('itemMaxCount').value;
+    const advanceWeeks = document.getElementById('itemAdvanceWeeks').value;
+    const allowSameDay = document.getElementById('itemAllowSameDay').checked;
+    const cancelDeadline = document.getElementById('itemCancelDeadline').value;
+    const rescheduleDeadline = document.getElementById('itemRescheduleDeadline').value;
+    const maxActive = document.getElementById('itemMaxActive').value;
 
     if (!name) {
         showToast('请输入事项名称', 'error');
@@ -560,19 +575,30 @@ async function saveItem() {
     }
 
     try {
+        const bodyData = {
+            name,
+            description,
+            default_max_count: defaultMaxCount,
+            advance_weeks: advanceWeeks,
+            allow_same_day: allowSameDay,
+            cancel_deadline_hours: cancelDeadline,
+            reschedule_deadline_hours: rescheduleDeadline,
+            max_active_appointments: maxActive
+        };
+
         let res;
         let itemData;
         if (state.editingItemId) {
             res = await fetch(`${API_BASE}/items/${state.editingItemId}`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name, description, default_max_count: defaultMaxCount })
+                body: JSON.stringify(bodyData)
             });
         } else {
             res = await fetch(`${API_BASE}/items`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name, description, default_max_count: defaultMaxCount })
+                body: JSON.stringify(bodyData)
             });
         }
 

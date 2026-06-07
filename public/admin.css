@@ -1143,3 +1143,66 @@ body {
     background: #ff4d4f;
     color: white;
 }
+
+.booking-rules-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 16px;
+    border: 1px solid #e8e8e8;
+    border-radius: 8px;
+    padding: 16px;
+    background: #fafafa;
+}
+
+.rule-item {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.rule-item label {
+    font-size: 13px;
+    font-weight: 500;
+    color: #333;
+    margin-bottom: 0;
+}
+
+.rule-item input[type="number"] {
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px solid #d9d9d9;
+    border-radius: 6px;
+    font-size: 14px;
+}
+
+.rule-item input[type="number"]:focus {
+    outline: none;
+    border-color: #667eea;
+}
+
+.rule-item .form-tip {
+    font-size: 11px;
+    color: #999;
+    margin-top: 2px;
+}
+
+.checkbox-inline {
+    display: flex;
+    align-items: center;
+    min-height: 38px;
+}
+
+.checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    font-size: 14px;
+    color: #333;
+}
+
+.checkbox-label input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+}

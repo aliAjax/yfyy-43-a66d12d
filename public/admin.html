@@ -524,6 +524,42 @@
             </div>
             <div class="form-group">
                 <div class="materials-header">
+                    <label>预约规则设置</label>
+                </div>
+                <div class="booking-rules-grid">
+                    <div class="rule-item">
+                        <label>最多可提前预约（周）</label>
+                        <input type="number" id="itemAdvanceWeeks" placeholder="默认 4 周" min="1" max="52">
+                        <small class="form-tip">留空使用默认值</small>
+                    </div>
+                    <div class="rule-item">
+                        <label>是否允许当天预约</label>
+                        <div class="checkbox-inline">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="itemAllowSameDay">
+                                <span>允许当天预约</span>
+                            </label>
+                        </div>
+                    </div>
+                    <div class="rule-item">
+                        <label>取消截止时间（小时）</label>
+                        <input type="number" id="itemCancelDeadline" placeholder="预约前 N 小时" min="0" max="168">
+                        <small class="form-tip">预约前多少小时内不能取消，留空则使用默认（过期前均可取消）</small>
+                    </div>
+                    <div class="rule-item">
+                        <label>改期截止时间（小时）</label>
+                        <input type="number" id="itemRescheduleDeadline" placeholder="预约前 N 小时" min="0" max="168">
+                        <small class="form-tip">预约前多少小时内不能改期，留空则使用默认</small>
+                    </div>
+                    <div class="rule-item">
+                        <label>未完成预约上限</label>
+                        <input type="number" id="itemMaxActive" placeholder="每手机号 / 每事项" min="1" max="20">
+                        <small class="form-tip">同一手机号同一事项最多可有的未完成预约数，留空默认 1 个</small>
+                    </div>
+                </div>
+            </div>
+            <div class="form-group">
+                <div class="materials-header">
                     <label>办理窗口配置</label>
                 </div>
                 <div id="windowConfigList" class="window-config-list">
