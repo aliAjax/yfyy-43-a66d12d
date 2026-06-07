@@ -499,7 +499,7 @@ function openAddItemModal() {
     document.getElementById('itemDesc').value = '';
     document.getElementById('itemMaxCount').value = 20;
     document.getElementById('itemAdvanceWeeks').value = '';
-    document.getElementById('itemAllowSameDay').checked = false;
+    document.getElementById('itemAllowSameDay').value = '';
     document.getElementById('itemCancelDeadline').value = '';
     document.getElementById('itemRescheduleDeadline').value = '';
     document.getElementById('itemMaxActive').value = '';
@@ -518,7 +518,7 @@ async function editItem(id) {
     document.getElementById('itemDesc').value = item.description || '';
     document.getElementById('itemMaxCount').value = item.default_max_count || 20;
     document.getElementById('itemAdvanceWeeks').value = item.advance_weeks !== null && item.advance_weeks !== undefined ? item.advance_weeks : '';
-    document.getElementById('itemAllowSameDay').checked = item.allow_same_day === 1;
+    document.getElementById('itemAllowSameDay').value = item.allow_same_day === null || item.allow_same_day === undefined ? '' : String(item.allow_same_day);
     document.getElementById('itemCancelDeadline').value = item.cancel_deadline_hours !== null && item.cancel_deadline_hours !== undefined ? item.cancel_deadline_hours : '';
     document.getElementById('itemRescheduleDeadline').value = item.reschedule_deadline_hours !== null && item.reschedule_deadline_hours !== undefined ? item.reschedule_deadline_hours : '';
     document.getElementById('itemMaxActive').value = item.max_active_appointments !== null && item.max_active_appointments !== undefined ? item.max_active_appointments : '';
@@ -558,7 +558,7 @@ async function saveItem() {
     const description = document.getElementById('itemDesc').value.trim();
     const defaultMaxCount = document.getElementById('itemMaxCount').value;
     const advanceWeeks = document.getElementById('itemAdvanceWeeks').value;
-    const allowSameDay = document.getElementById('itemAllowSameDay').checked;
+    const allowSameDay = document.getElementById('itemAllowSameDay').value;
     const cancelDeadline = document.getElementById('itemCancelDeadline').value;
     const rescheduleDeadline = document.getElementById('itemRescheduleDeadline').value;
     const maxActive = document.getElementById('itemMaxActive').value;

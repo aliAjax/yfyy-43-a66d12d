@@ -186,6 +186,13 @@ function isSameDayBookingAllowed(item) {
     return item.allow_same_day === 1;
 }
 
+function isSameDayReschedulingAllowed(item) {
+    if (!item || item.allow_same_day === null || item.allow_same_day === undefined) {
+        return false;
+    }
+    return item.allow_same_day === 1;
+}
+
 function getMaxAdvanceDate(item) {
     const weeks = getMaxAdvanceWeeks(item);
     const today = new Date();
@@ -259,16 +266,13 @@ function isReschedulingAllowed(appointment, item) {
     if (!appointment || appointment.status !== 'pending') return false;
     if (!item) return true;
 
-    let deadlineHours = item.reschedule_deadline_hours;
-    if (deadlineHours === null || deadlineHours === undefined || deadlineHours === '') {
-        deadlineHours = item.cancel_deadline_hours;
-    }
+    const deadlineHours = item.reschedule_deadline_hours;
     if (deadlineHours === null || deadlineHours === undefined || deadlineHours === '') {
         const today = new Date();
         today.setHours(0, 0, 0, 0);
         const aptDate = new Date(appointment.appointment_date);
         aptDate.setHours(0, 0, 0, 0);
-        return aptDate > today;
+        return aptDate >= today;
     }
 
     const aptDateTime = getAppointmentDateTime(appointment.appointment_date, appointment.time_slot);
@@ -770,10 +774,7 @@ function renderAppointmentDetail(appointment, materials = []) {
         }
 
         if (!canReschedule) {
-            let deadlineHours = item?.reschedule_deadline_hours;
-            if (deadlineHours === null || deadlineHours === undefined || deadlineHours === '') {
-                deadlineHours = item?.cancel_deadline_hours;
-            }
+            const deadlineHours = item?.reschedule_deadline_hours;
             if (deadlineHours !== null && deadlineHours !== undefined && deadlineHours !== '') {
                 rescheduleTip = `<div class="detail-tip detail-tip-muted">⏰ 已超过改期截止时间（预约前 ${deadlineHours} 小时内不可改期）</div>`;
             } else {
@@ -1147,7 +1148,7 @@ function renderRescheduleDateGrid() {
     today.setHours(0, 0, 0, 0);
 
     const item = state.currentAppointment ? getItemById(state.currentAppointment.item_id) : null;
-    const sameDayAllowed = isSameDayBookingAllowed(item);
+    const sameDayAllowed = isSameDayReschedulingAllowed(item);
     const maxAdvanceDate = getMaxAdvanceDate(item);
 
     const container = document.getElementById('rescheduleDateGrid');

@@ -369,6 +369,13 @@ function isSameDayBookingAllowed(item) {
   return item.allow_same_day === 1;
 }
 
+function isSameDayReschedulingAllowed(item) {
+  if (item.allow_same_day === null || item.allow_same_day === undefined) {
+    return false;
+  }
+  return item.allow_same_day === 1;
+}
+
 function getAppointmentDateTime(dateStr, timeSlot) {
   const startTime = getAppointmentStartTime(timeSlot);
   const [hours, minutes] = startTime.split(':').map(Number);
@@ -398,16 +405,13 @@ function isCancellationAllowed(appointment, item) {
 function isReschedulingAllowed(appointment, item) {
   if (appointment.status !== 'pending') return false;
 
-  let deadlineHours = item.reschedule_deadline_hours;
-  if (deadlineHours === null || deadlineHours === undefined) {
-    deadlineHours = item.cancel_deadline_hours;
-  }
+  const deadlineHours = item.reschedule_deadline_hours;
   if (deadlineHours === null || deadlineHours === undefined) {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const aptDate = new Date(appointment.appointment_date);
     aptDate.setHours(0, 0, 0, 0);
-    return aptDate > today;
+    return aptDate >= today;
   }
 
   const aptDateTime = getAppointmentDateTime(appointment.appointment_date, appointment.time_slot);
@@ -441,7 +445,7 @@ app.post('/api/items', (req, res) => {
   }
   const maxCount = default_max_count && default_max_count > 0 ? parseInt(default_max_count) : 20;
   const advanceWeeks = advance_weeks !== undefined && advance_weeks !== '' ? parseInt(advance_weeks) : null;
-  const allowSameDay = allow_same_day !== undefined && allow_same_day !== '' ? (allow_same_day ? 1 : 0) : null;
+  const allowSameDay = parseNullableBool(allow_same_day, null);
   const cancelDeadlineHours = cancel_deadline_hours !== undefined && cancel_deadline_hours !== '' ? parseInt(cancel_deadline_hours) : null;
   const rescheduleDeadlineHours = reschedule_deadline_hours !== undefined && reschedule_deadline_hours !== '' ? parseInt(reschedule_deadline_hours) : null;
   const maxActiveAppointments = max_active_appointments !== undefined && max_active_appointments !== '' ? parseInt(max_active_appointments) : null;
@@ -482,6 +486,14 @@ function parseNullableInt(value, fallback) {
   return isNaN(parsed) ? null : parsed;
 }
 
+function parseNullableBool(value, fallback) {
+  if (value === undefined) return fallback;
+  if (value === null || value === '') return null;
+  if (value === true || value === 1 || value === '1') return 1;
+  if (value === false || value === 0 || value === '0') return 0;
+  return null;
+}
+
 app.put('/api/items/:id', (req, res) => {
   const { id } = req.params;
   const { name, description, default_max_count, advance_weeks, allow_same_day, cancel_deadline_hours, reschedule_deadline_hours, max_active_appointments } = req.body;
@@ -496,7 +508,7 @@ app.put('/api/items/:id', (req, res) => {
 
   const maxCount = default_max_count !== undefined ? (default_max_count > 0 ? parseInt(default_max_count) : 20) : item.default_max_count;
   const advanceWeeks = parseNullableInt(advance_weeks, item.advance_weeks);
-  const allowSameDay = allow_same_day !== undefined ? (allow_same_day ? 1 : 0) : item.allow_same_day;
+  const allowSameDay = parseNullableBool(allow_same_day, item.allow_same_day);
   const cancelDeadlineHours = parseNullableInt(cancel_deadline_hours, item.cancel_deadline_hours);
   const rescheduleDeadlineHours = parseNullableInt(reschedule_deadline_hours, item.reschedule_deadline_hours);
   const maxActiveAppointments = parseNullableInt(max_active_appointments, item.max_active_appointments);
@@ -2850,10 +2862,7 @@ app.post('/api/appointments/:id/reschedule', (req, res) => {
   }
 
   if (!isReschedulingAllowed(appointment, item)) {
-    let deadlineHours = item.reschedule_deadline_hours;
-    if (deadlineHours === null || deadlineHours === undefined) {
-      deadlineHours = item.cancel_deadline_hours;
-    }
+    const deadlineHours = item.reschedule_deadline_hours;
     if (deadlineHours !== null && deadlineHours !== undefined) {
       return res.status(400).json({ error: `已超过改期截止时间（预约前 ${deadlineHours} 小时内不可改期）` });
     }
@@ -2878,7 +2887,7 @@ app.post('/api/appointments/:id/reschedule', (req, res) => {
     return res.status(400).json({ error: '不能改期到过去的日期' });
   }
 
-  if (isNewDateToday && !isSameDayBookingAllowed(item)) {
+  if (isNewDateToday && !isSameDayReschedulingAllowed(item)) {
     return res.status(400).json({ error: '该事项不支持当天预约' });
   }
 

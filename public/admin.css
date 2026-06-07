@@ -1167,15 +1167,18 @@ body {
     margin-bottom: 0;
 }
 
-.rule-item input[type="number"] {
+.rule-item input[type="number"],
+.rule-item select {
     width: 100%;
     padding: 8px 12px;
     border: 1px solid #d9d9d9;
     border-radius: 6px;
     font-size: 14px;
+    background: #fff;
 }
 
-.rule-item input[type="number"]:focus {
+.rule-item input[type="number"]:focus,
+.rule-item select:focus {
     outline: none;
     border-color: #667eea;
 }
