@@ -1123,8 +1123,8 @@ app.get('/api/slots/:itemId/:date', (req, res) => {
 
         const windowApts = db.prepare(
           `SELECT COUNT(*) as cnt FROM appointments 
-           WHERE window_id = ? AND item_id = ? AND appointment_date = ? AND status != ?`
-        ).get(iw.window_id, itemId, date, 'cancelled');
+           WHERE window_id = ? AND item_id = ? AND appointment_date = ? AND status NOT IN ('cancelled', 'no_show')`
+        ).get(iw.window_id, itemId, date);
 
         const windowUsedCount = windowApts.cnt;
         const windowAvailable = Math.max(0, ws.max_count - windowUsedCount);
@@ -1172,7 +1172,9 @@ app.get('/api/slots/:itemId/:date', (req, res) => {
     }
 
     const timeSlots = generateTimeSlots(slot.max_count);
-    const appointments = db.prepare('SELECT time_slot FROM appointments WHERE item_id = ? AND appointment_date = ? AND status != ?').all(itemId, date, 'cancelled');
+    const appointments = db.prepare(
+      "SELECT time_slot FROM appointments WHERE item_id = ? AND appointment_date = ? AND status NOT IN ('cancelled', 'no_show')"
+    ).all(itemId, date);
 
     const usedSlots = new Set(appointments.map(a => a.time_slot));
     const availableSlots = timeSlots.map(slotTime => ({
@@ -1216,8 +1218,8 @@ app.get('/api/slots/:itemId/:date', (req, res) => {
 
     const windowApts = db.prepare(
       `SELECT time_slot FROM appointments 
-       WHERE window_id = ? AND item_id = ? AND appointment_date = ? AND status != ?`
-    ).all(iw.window_id, itemId, date, 'cancelled');
+       WHERE window_id = ? AND item_id = ? AND appointment_date = ? AND status NOT IN ('cancelled', 'no_show')`
+    ).all(iw.window_id, itemId, date);
 
     const windowUsedCount = windowApts.length;
     const windowAvailable = Math.max(0, ws.max_count - windowUsedCount);
@@ -1237,8 +1239,8 @@ app.get('/api/slots/:itemId/:date', (req, res) => {
   const totalAvailable = Math.max(0, totalMax - totalCurrent);
   const timeSlots = generateTimeSlots(totalMax);
   const allAppointments = db.prepare(
-    'SELECT time_slot FROM appointments WHERE item_id = ? AND appointment_date = ? AND status != ?'
-  ).all(itemId, date, 'cancelled');
+    "SELECT time_slot FROM appointments WHERE item_id = ? AND appointment_date = ? AND status NOT IN ('cancelled', 'no_show')"
+  ).all(itemId, date);
 
   const usedSlots = new Set(allAppointments.map(a => a.time_slot));
   const availableSlots = timeSlots.map(slotTime => ({
