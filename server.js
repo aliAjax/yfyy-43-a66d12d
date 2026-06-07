@@ -2227,10 +2227,19 @@ app.get('/api/appointments/query', (req, res) => {
 
 app.get('/api/appointments/:id/material-snapshots', (req, res) => {
   const { id } = req.params;
+  const { phone } = req.query;
+
+  if (!phone) {
+    return res.status(400).json({ error: '请提供手机号' });
+  }
 
   const appointment = db.prepare('SELECT id, phone FROM appointments WHERE id = ?').get(id);
   if (!appointment) {
     return res.status(404).json({ error: '预约不存在' });
+  }
+
+  if (appointment.phone !== phone) {
+    return res.status(403).json({ error: '手机号不匹配，无权查看该预约的材料' });
   }
 
   const snapshots = db.prepare(
