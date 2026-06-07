@@ -1605,7 +1605,7 @@ app.post('/api/admin/appointments', (req, res) => {
   }
 });
 
-function validateBatchAppointmentItem(item, index, allItems) {
+function validateBatchAppointmentItem(item, index, counters) {
   const result = {
     index: index + 1,
     item_name: item.item_name || '',
@@ -1697,6 +1697,9 @@ function validateBatchAppointmentItem(item, index, allItems) {
   const useTimeSlots = timeSlotCaps.length > 0;
   let matchedTimeSlot = null;
 
+  const tsKey = `${dbItem.id}_${dateStr}_${timeSlotStr}`;
+  const batchTsCount = counters ? (counters.timeSlots[tsKey] || 0) : 0;
+
   if (useTimeSlots) {
     for (const tsc of timeSlotCaps) {
       if (timeSlotStr === `${tsc.start_time}-${tsc.end_time}`) {
@@ -1709,7 +1712,8 @@ function validateBatchAppointmentItem(item, index, allItems) {
       result.message = '时段无效，请检查时段格式';
       return result;
     }
-    if (matchedTimeSlot.current_count >= matchedTimeSlot.max_count) {
+    const totalUsed = matchedTimeSlot.current_count + batchTsCount;
+    if (totalUsed >= matchedTimeSlot.max_count) {
       result.status = 'error';
       result.message = '时段号源已满';
       return result;
@@ -1720,7 +1724,8 @@ function validateBatchAppointmentItem(item, index, allItems) {
        WHERE item_id = ? AND appointment_date = ? AND time_slot = ? AND status NOT IN ('cancelled', 'no_show')`
     ).get(dbItem.id, dateStr, timeSlotStr);
 
-    if (slotCheck.cnt > 0) {
+    const totalUsed = slotCheck.cnt + batchTsCount;
+    if (totalUsed > 0) {
       result.status = 'error';
       result.message = '该时段已被预约';
       return result;
@@ -1733,6 +1738,11 @@ function validateBatchAppointmentItem(item, index, allItems) {
     FROM item_windows iw
     WHERE iw.item_id = ?
   `).get(dbItem.id).cnt;
+
+  const dailyKey = `${dbItem.id}_${dateStr}`;
+  const batchDailyCount = counters ? (counters.dailySlots[dailyKey] || 0) : 0;
+  const activeKey = `${item.phone.trim()}_${dbItem.id}`;
+  const batchActiveCount = counters ? (counters.activeAppointments[activeKey] || 0) : 0;
 
   if (item.window_name && item.window_name.trim() && item.window_name.trim() !== '自动分配') {
     const winName = item.window_name.trim();
@@ -1768,7 +1778,12 @@ function validateBatchAppointmentItem(item, index, allItems) {
         `SELECT COUNT(*) as cnt FROM appointments 
          WHERE window_id = ? AND item_id = ? AND appointment_date = ? AND status NOT IN ('cancelled', 'no_show')`
       ).get(window.id, dbItem.id, dateStr).cnt;
-      if (windowUsed >= ws.max_count) {
+      
+      const wsKey = `${dbItem.id}_${dateStr}_${window.id}`;
+      const batchWsCount = counters ? (counters.windowSlots[wsKey] || 0) : 0;
+      const totalWindowUsed = windowUsed + batchWsCount;
+      
+      if (totalWindowUsed >= ws.max_count) {
         result.status = 'error';
         result.message = '窗口容量不足';
         return result;
@@ -1792,21 +1807,31 @@ function validateBatchAppointmentItem(item, index, allItems) {
     }
 
     let hasAvailable = false;
+    let bestWindowId = null;
+    let bestAvailable = -1;
+
     for (const iw of itemWindows) {
       let ws = db.prepare(
         'SELECT * FROM window_slots WHERE window_id = ? AND item_id = ? AND date = ?'
       ).get(iw.window_id, dbItem.id, dateStr);
       if (!ws) {
-        hasAvailable = true;
-        break;
+        const defaultCapacity = iw.default_capacity || 10;
+        ws = { max_count: defaultCapacity, current_count: 0 };
       }
       const windowUsed = db.prepare(
         `SELECT COUNT(*) as cnt FROM appointments 
          WHERE window_id = ? AND item_id = ? AND appointment_date = ? AND status NOT IN ('cancelled', 'no_show')`
       ).get(iw.window_id, dbItem.id, dateStr).cnt;
-      if (windowUsed < ws.max_count) {
+      
+      const wsKey = `${dbItem.id}_${dateStr}_${iw.window_id}`;
+      const batchWsCount = counters ? (counters.windowSlots[wsKey] || 0) : 0;
+      const totalWindowUsed = windowUsed + batchWsCount;
+      const available = ws.max_count - totalWindowUsed;
+      
+      if (available > 0 && available > bestAvailable) {
+        bestAvailable = available;
+        bestWindowId = iw.window_id;
         hasAvailable = true;
-        break;
       }
     }
     if (!hasAvailable) {
@@ -1814,13 +1839,15 @@ function validateBatchAppointmentItem(item, index, allItems) {
       result.message = '所有窗口的号源均已满';
       return result;
     }
+    result.window_id = bestWindowId;
   } else if (!useTimeSlots) {
     let dailySlot = db.prepare('SELECT * FROM daily_slots WHERE item_id = ? AND date = ?').get(dbItem.id, dateStr);
     if (!dailySlot) {
       const defaultMax = dbItem.default_max_count || 20;
       dailySlot = { max_count: defaultMax, current_count: 0 };
     }
-    if (dailySlot.current_count >= dailySlot.max_count) {
+    const totalDailyUsed = dailySlot.current_count + batchDailyCount;
+    if (totalDailyUsed >= dailySlot.max_count) {
       result.status = 'error';
       result.message = '该日期号源已满';
       return result;
@@ -1829,24 +1856,46 @@ function validateBatchAppointmentItem(item, index, allItems) {
 
   const maxActive = getMaxActiveAppointments(dbItem);
   const activeCount = countActiveAppointments(item.phone.trim(), dbItem.id);
-  if (activeCount >= maxActive) {
+  const totalActive = activeCount + batchActiveCount;
+  if (totalActive >= maxActive) {
     result.status = 'error';
-    result.message = `该手机号已有 ${activeCount} 个未完成的${dbItem.name}预约`;
+    result.message = `该手机号已有 ${totalActive} 个未完成的${dbItem.name}预约`;
     return result;
   }
 
-  const duplicateInBatch = allItems.filter((it, idx) => 
-    idx < index && 
-    it.phone && it.phone.trim() === item.phone.trim() &&
-    it.item_name && it.item_name.trim() === item.item_name.trim() &&
-    it.appointment_date && it.appointment_date.trim() === item.appointment_date.trim()
-  ).length;
-  if (duplicateInBatch > 0) {
-    result.status = 'warn';
-    result.message = '批次内存在重复预约，可能导入失败';
+  return result;
+}
+
+function createBatchCounters() {
+  return {
+    timeSlots: {},
+    windowSlots: {},
+    dailySlots: {},
+    activeAppointments: {}
+  };
+}
+
+function updateBatchCounters(counters, validatedItem, originalItem) {
+  if (!counters || !validatedItem || validatedItem.status === 'error') return;
+
+  const itemId = validatedItem.item_id;
+  const dateStr = originalItem.appointment_date.trim();
+  const timeSlotStr = originalItem.time_slot.trim();
+  const phone = originalItem.phone.trim();
+
+  const tsKey = `${itemId}_${dateStr}_${timeSlotStr}`;
+  counters.timeSlots[tsKey] = (counters.timeSlots[tsKey] || 0) + 1;
+
+  if (validatedItem.window_id) {
+    const wsKey = `${itemId}_${dateStr}_${validatedItem.window_id}`;
+    counters.windowSlots[wsKey] = (counters.windowSlots[wsKey] || 0) + 1;
   }
 
-  return result;
+  const dailyKey = `${itemId}_${dateStr}`;
+  counters.dailySlots[dailyKey] = (counters.dailySlots[dailyKey] || 0) + 1;
+
+  const activeKey = `${phone}_${itemId}`;
+  counters.activeAppointments[activeKey] = (counters.activeAppointments[activeKey] || 0) + 1;
 }
 
 app.post('/api/admin/appointments/batch/preview', (req, res) => {
@@ -1856,9 +1905,16 @@ app.post('/api/admin/appointments/batch/preview', (req, res) => {
   }
 
   try {
-    const results = appointments.map((apt, index) => 
-      validateBatchAppointmentItem(apt, index, appointments)
-    );
+    const results = [];
+    const counters = createBatchCounters();
+
+    appointments.forEach((apt, index) => {
+      const validated = validateBatchAppointmentItem(apt, index, counters);
+      results.push(validated);
+      if (validated.status !== 'error') {
+        updateBatchCounters(counters, validated, apt);
+      }
+    });
 
     const successCount = results.filter(r => r.status === 'ok').length;
     const warnCount = results.filter(r => r.status === 'warn').length;
@@ -1886,9 +1942,16 @@ app.post('/api/admin/appointments/batch', (req, res) => {
   }
 
   try {
-    const results = appointments.map((apt, index) => 
-      validateBatchAppointmentItem(apt, index, appointments)
-    );
+    const results = [];
+    const counters = createBatchCounters();
+
+    appointments.forEach((apt, index) => {
+      const validated = validateBatchAppointmentItem(apt, index, counters);
+      results.push(validated);
+      if (validated.status !== 'error') {
+        updateBatchCounters(counters, validated, apt);
+      }
+    });
 
     const validItems = results.filter(r => r.status === 'ok' || r.status === 'warn');
     
