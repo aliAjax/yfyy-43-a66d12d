@@ -1382,7 +1382,7 @@ function validateAndCreateAppointment({
   } else {
     const slotCheck = db.prepare(
       `SELECT COUNT(*) as cnt FROM appointments 
-       WHERE item_id = ? AND appointment_date = ? AND time_slot = ? AND status != 'cancelled'`
+       WHERE item_id = ? AND appointment_date = ? AND time_slot = ? AND status NOT IN ('cancelled', 'no_show')`
     ).get(item_id, appointment_date, time_slot);
 
     if (slotCheck.cnt > 0) {
@@ -1427,7 +1427,7 @@ function validateAndCreateAppointment({
 
       const windowUsed = db.prepare(
         `SELECT COUNT(*) as cnt FROM appointments 
-         WHERE window_id = ? AND item_id = ? AND appointment_date = ? AND status != 'cancelled'`
+         WHERE window_id = ? AND item_id = ? AND appointment_date = ? AND status NOT IN ('cancelled', 'no_show')`
       ).get(window_id, item_id, appointment_date).cnt;
 
       if (windowUsed >= ws.max_count) {
@@ -1468,7 +1468,7 @@ function validateAndCreateAppointment({
 
         const windowUsed = db.prepare(
           `SELECT COUNT(*) as cnt FROM appointments 
-           WHERE window_id = ? AND item_id = ? AND appointment_date = ? AND status != 'cancelled'`
+           WHERE window_id = ? AND item_id = ? AND appointment_date = ? AND status NOT IN ('cancelled', 'no_show')`
         ).get(iw.window_id, item_id, appointment_date).cnt;
 
         const available = ws.max_count - windowUsed;
@@ -1920,8 +1920,8 @@ function getNoShowCount(phone) {
   const row = db.prepare(`
     SELECT COUNT(*) as count 
     FROM appointments 
-    WHERE phone = ? AND status = 'no_show' AND appointment_date >= ?
-  `).get(phone, startDate);
+    WHERE phone = ? AND status = 'no_show' AND no_show_at >= ?
+  `).get(phone, startDate + ' 00:00:00');
 
   return row ? row.count : 0;
 }
@@ -2173,7 +2173,7 @@ app.put('/api/slots/:itemId/:date/windows/max', (req, res) => {
 
     const usedCount = db.prepare(
       `SELECT COUNT(*) as cnt FROM appointments
-       WHERE window_id = ? AND item_id = ? AND appointment_date = ? AND status != 'cancelled'`
+       WHERE window_id = ? AND item_id = ? AND appointment_date = ? AND status NOT IN ('cancelled', 'no_show')`
     ).get(windowId, itemId, date).cnt;
 
     if (maxCount < usedCount) {
@@ -2241,7 +2241,7 @@ app.put('/api/slots/:itemId/:date/window/:windowId/max', (req, res) => {
 
   const usedCount = db.prepare(
     `SELECT COUNT(*) as cnt FROM appointments 
-     WHERE window_id = ? AND item_id = ? AND appointment_date = ? AND status != 'cancelled'`
+     WHERE window_id = ? AND item_id = ? AND appointment_date = ? AND status NOT IN ('cancelled', 'no_show')`
   ).get(windowId, itemId, date).cnt;
 
   if (existing) {
@@ -2334,7 +2334,7 @@ app.put('/api/slots/:itemId/:date/time-slots', (req, res) => {
     return db.prepare(`
       SELECT COUNT(*) as cnt FROM appointments
       WHERE item_id = ? AND appointment_date = ?
-      AND time_slot = ? AND status != 'cancelled'
+      AND time_slot = ? AND status NOT IN ('cancelled', 'no_show')
     `).get(itemId, date, `${startTime}-${endTime}`).cnt;
   };
 
@@ -2346,7 +2346,7 @@ app.put('/api/slots/:itemId/:date/time-slots', (req, res) => {
        AND a.appointment_date = tsc.date
        AND a.time_slot = tsc.start_time || '-' || tsc.end_time
       WHERE tsc.item_id = ? AND tsc.date = ?
-      AND a.status != 'cancelled'
+      AND a.status NOT IN ('cancelled', 'no_show')
     `).get(itemId, date).cnt;
 
     if (activeCount > 0) {
@@ -3052,7 +3052,7 @@ app.post('/api/phone-restrictions', (req, res) => {
 
   try {
     const result = db.prepare(
-      'INSERT INTO phone_restrictions (phone, reason, end_date) VALUES (?, ?, ?)'
+      'INSERT INTO phone_restrictions (phone, reason, end_date, is_auto, restriction_type) VALUES (?, ?, ?, 0, \'manual\')'
     ).run(phone, reason || '', end_date);
 
     res.json({
@@ -3060,6 +3060,8 @@ app.post('/api/phone-restrictions', (req, res) => {
       phone,
       reason: reason || '',
       end_date,
+      is_auto: 0,
+      restriction_type: 'manual',
       is_active: true
     });
   } catch (e) {
@@ -3106,11 +3108,15 @@ app.put('/api/phone-restrictions/:id', (req, res) => {
     ).run(newPhone, newReason, newEndDate, id);
 
     const todayStr = getTodayStr();
+    const updated = db.prepare('SELECT * FROM phone_restrictions WHERE id = ?').get(id);
     res.json({
       id: parseInt(id),
       phone: newPhone,
       reason: newReason,
       end_date: newEndDate,
+      is_auto: updated.is_auto || 0,
+      restriction_type: updated.restriction_type || 'manual',
+      no_show_count: updated.no_show_count,
       is_active: newEndDate >= todayStr
     });
   } catch (e) {
@@ -3303,7 +3309,7 @@ app.post('/api/appointments/:id/reschedule', (req, res) => {
   } else {
     const slotCheck = db.prepare(
       `SELECT COUNT(*) as cnt FROM appointments 
-       WHERE item_id = ? AND appointment_date = ? AND time_slot = ? AND status != 'cancelled'`
+       WHERE item_id = ? AND appointment_date = ? AND time_slot = ? AND status NOT IN ('cancelled', 'no_show')`
     ).get(appointment.item_id, new_date, new_time_slot);
     if (slotCheck.cnt > 0) {
       return res.status(400).json({ error: '该时段已被预约，请选择其他时段' });
@@ -3351,7 +3357,7 @@ app.post('/api/appointments/:id/reschedule', (req, res) => {
 
       const windowUsed = db.prepare(
         `SELECT COUNT(*) as cnt FROM appointments 
-         WHERE window_id = ? AND item_id = ? AND appointment_date = ? AND status != 'cancelled'`
+         WHERE window_id = ? AND item_id = ? AND appointment_date = ? AND status NOT IN ('cancelled', 'no_show')`
       ).get(iw.window_id, appointment.item_id, new_date).cnt;
 
       const available = ws.max_count - windowUsed;
@@ -3621,7 +3627,7 @@ app.get('/api/windows/:windowId/queue', (req, res) => {
 
   const totalApts = db.prepare(`
     SELECT COUNT(*) as cnt FROM appointments
-    WHERE window_id = ? AND appointment_date = ? AND status != 'cancelled'
+    WHERE window_id = ? AND appointment_date = ? AND status NOT IN ('cancelled', 'no_show')
   `).get(windowId, today).cnt;
 
   const completedApts = db.prepare(`
