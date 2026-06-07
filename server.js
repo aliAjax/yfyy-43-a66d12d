@@ -1605,6 +1605,363 @@ app.post('/api/admin/appointments', (req, res) => {
   }
 });
 
+function validateBatchAppointmentItem(item, index, allItems) {
+  const result = {
+    index: index + 1,
+    item_name: item.item_name || '',
+    user_name: item.user_name || '',
+    phone: item.phone || '',
+    appointment_date: item.appointment_date || '',
+    time_slot: item.time_slot || '',
+    window_name: item.window_name || '',
+    status: 'ok',
+    message: '',
+    item_id: null,
+    window_id: null
+  };
+
+  if (!item.item_name || !item.item_name.trim()) {
+    result.status = 'error';
+    result.message = '事项名称不能为空';
+    return result;
+  }
+
+  const dbItem = db.prepare('SELECT * FROM items WHERE name = ?').get(item.item_name.trim());
+  if (!dbItem) {
+    result.status = 'error';
+    result.message = '事项不存在';
+    return result;
+  }
+  result.item_id = dbItem.id;
+
+  if (!item.user_name || !item.user_name.trim()) {
+    result.status = 'error';
+    result.message = '姓名不能为空';
+    return result;
+  }
+
+  if (!item.phone || !item.phone.trim()) {
+    result.status = 'error';
+    result.message = '手机号不能为空';
+    return result;
+  }
+
+  const phoneRegex = /^1[3-9]\d{9}$/;
+  if (!phoneRegex.test(item.phone.trim())) {
+    result.status = 'error';
+    result.message = '手机号格式错误';
+    return result;
+  }
+
+  if (!item.appointment_date || !item.appointment_date.trim()) {
+    result.status = 'error';
+    result.message = '日期不能为空';
+    return result;
+  }
+
+  if (!isValidDate(item.appointment_date.trim())) {
+    result.status = 'error';
+    result.message = '日期格式不正确，应为 YYYY-MM-DD';
+    return result;
+  }
+
+  const dateStr = item.appointment_date.trim();
+  const dateObj = new Date(dateStr);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  if (dateObj < today) {
+    result.status = 'error';
+    result.message = '不能预约过去的日期';
+    return result;
+  }
+
+  if (!isWorkday(dateStr)) {
+    result.status = 'error';
+    result.message = '节假日或周末不可预约';
+    return result;
+  }
+
+  if (!item.time_slot || !item.time_slot.trim()) {
+    result.status = 'error';
+    result.message = '时段不能为空';
+    return result;
+  }
+
+  const timeSlotStr = item.time_slot.trim();
+  const timeSlotCaps = db.prepare(`
+    SELECT * FROM time_slot_capacities 
+    WHERE item_id = ? AND date = ? 
+    ORDER BY sort_order ASC, start_time ASC
+  `).all(dbItem.id, dateStr);
+
+  const useTimeSlots = timeSlotCaps.length > 0;
+  let matchedTimeSlot = null;
+
+  if (useTimeSlots) {
+    for (const tsc of timeSlotCaps) {
+      if (timeSlotStr === `${tsc.start_time}-${tsc.end_time}`) {
+        matchedTimeSlot = tsc;
+        break;
+      }
+    }
+    if (!matchedTimeSlot) {
+      result.status = 'error';
+      result.message = '时段无效，请检查时段格式';
+      return result;
+    }
+    if (matchedTimeSlot.current_count >= matchedTimeSlot.max_count) {
+      result.status = 'error';
+      result.message = '时段号源已满';
+      return result;
+    }
+  } else {
+    const slotCheck = db.prepare(
+      `SELECT COUNT(*) as cnt FROM appointments 
+       WHERE item_id = ? AND appointment_date = ? AND time_slot = ? AND status NOT IN ('cancelled', 'no_show')`
+    ).get(dbItem.id, dateStr, timeSlotStr);
+
+    if (slotCheck.cnt > 0) {
+      result.status = 'error';
+      result.message = '该时段已被预约';
+      return result;
+    }
+  }
+
+  let targetWindowId = null;
+  const allItemWindows = db.prepare(`
+    SELECT COUNT(*) as cnt
+    FROM item_windows iw
+    WHERE iw.item_id = ?
+  `).get(dbItem.id).cnt;
+
+  if (item.window_name && item.window_name.trim() && item.window_name.trim() !== '自动分配') {
+    const winName = item.window_name.trim();
+    const window = db.prepare('SELECT * FROM windows WHERE name = ? AND status = ?').get(winName, 'active');
+    if (!window) {
+      result.status = 'error';
+      result.message = '窗口不存在或不可用';
+      return result;
+    }
+
+    if (allItemWindows > 0) {
+      const itemWindow = db.prepare(`
+        SELECT iw.*
+        FROM item_windows iw
+        WHERE iw.item_id = ? AND iw.window_id = ?
+      `).get(dbItem.id, window.id);
+      if (!itemWindow) {
+        result.status = 'error';
+        result.message = '该窗口不支持此事项';
+        return result;
+      }
+    }
+
+    if (allItemWindows > 0) {
+      let ws = db.prepare(
+        'SELECT * FROM window_slots WHERE window_id = ? AND item_id = ? AND date = ?'
+      ).get(window.id, dbItem.id, dateStr);
+      if (!ws) {
+        const defaultCapacity = 10;
+        ws = { max_count: defaultCapacity, current_count: 0 };
+      }
+      const windowUsed = db.prepare(
+        `SELECT COUNT(*) as cnt FROM appointments 
+         WHERE window_id = ? AND item_id = ? AND appointment_date = ? AND status NOT IN ('cancelled', 'no_show')`
+      ).get(window.id, dbItem.id, dateStr).cnt;
+      if (windowUsed >= ws.max_count) {
+        result.status = 'error';
+        result.message = '窗口容量不足';
+        return result;
+      }
+    }
+    targetWindowId = window.id;
+    result.window_id = window.id;
+  } else if (allItemWindows > 0) {
+    const itemWindows = db.prepare(`
+      SELECT iw.*, w.name as window_name, w.status as window_status
+      FROM item_windows iw
+      LEFT JOIN windows w ON iw.window_id = w.id
+      WHERE iw.item_id = ? AND w.status = 'active'
+      ORDER BY w.sort_order ASC, w.id ASC
+    `).all(dbItem.id);
+
+    if (itemWindows.length === 0) {
+      result.status = 'error';
+      result.message = '该事项暂无可用办理窗口';
+      return result;
+    }
+
+    let hasAvailable = false;
+    for (const iw of itemWindows) {
+      let ws = db.prepare(
+        'SELECT * FROM window_slots WHERE window_id = ? AND item_id = ? AND date = ?'
+      ).get(iw.window_id, dbItem.id, dateStr);
+      if (!ws) {
+        hasAvailable = true;
+        break;
+      }
+      const windowUsed = db.prepare(
+        `SELECT COUNT(*) as cnt FROM appointments 
+         WHERE window_id = ? AND item_id = ? AND appointment_date = ? AND status NOT IN ('cancelled', 'no_show')`
+      ).get(iw.window_id, dbItem.id, dateStr).cnt;
+      if (windowUsed < ws.max_count) {
+        hasAvailable = true;
+        break;
+      }
+    }
+    if (!hasAvailable) {
+      result.status = 'error';
+      result.message = '所有窗口的号源均已满';
+      return result;
+    }
+  } else if (!useTimeSlots) {
+    let dailySlot = db.prepare('SELECT * FROM daily_slots WHERE item_id = ? AND date = ?').get(dbItem.id, dateStr);
+    if (!dailySlot) {
+      const defaultMax = dbItem.default_max_count || 20;
+      dailySlot = { max_count: defaultMax, current_count: 0 };
+    }
+    if (dailySlot.current_count >= dailySlot.max_count) {
+      result.status = 'error';
+      result.message = '该日期号源已满';
+      return result;
+    }
+  }
+
+  const maxActive = getMaxActiveAppointments(dbItem);
+  const activeCount = countActiveAppointments(item.phone.trim(), dbItem.id);
+  if (activeCount >= maxActive) {
+    result.status = 'error';
+    result.message = `该手机号已有 ${activeCount} 个未完成的${dbItem.name}预约`;
+    return result;
+  }
+
+  const duplicateInBatch = allItems.filter((it, idx) => 
+    idx < index && 
+    it.phone && it.phone.trim() === item.phone.trim() &&
+    it.item_name && it.item_name.trim() === item.item_name.trim() &&
+    it.appointment_date && it.appointment_date.trim() === item.appointment_date.trim()
+  ).length;
+  if (duplicateInBatch > 0) {
+    result.status = 'warn';
+    result.message = '批次内存在重复预约，可能导入失败';
+  }
+
+  return result;
+}
+
+app.post('/api/admin/appointments/batch/preview', (req, res) => {
+  const { appointments } = req.body;
+  if (!Array.isArray(appointments) || appointments.length === 0) {
+    return res.status(400).json({ error: '预约数据不能为空' });
+  }
+
+  try {
+    const results = appointments.map((apt, index) => 
+      validateBatchAppointmentItem(apt, index, appointments)
+    );
+
+    const successCount = results.filter(r => r.status === 'ok').length;
+    const warnCount = results.filter(r => r.status === 'warn').length;
+    const errorCount = results.filter(r => r.status === 'error').length;
+
+    res.json({
+      success: true,
+      total: results.length,
+      valid_count: successCount + warnCount,
+      success_count: successCount,
+      warn_count: warnCount,
+      error_count: errorCount,
+      items: results
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: '预览校验失败' });
+  }
+});
+
+app.post('/api/admin/appointments/batch', (req, res) => {
+  const { appointments } = req.body;
+  if (!Array.isArray(appointments) || appointments.length === 0) {
+    return res.status(400).json({ error: '预约数据不能为空' });
+  }
+
+  try {
+    const results = appointments.map((apt, index) => 
+      validateBatchAppointmentItem(apt, index, appointments)
+    );
+
+    const validItems = results.filter(r => r.status === 'ok' || r.status === 'warn');
+    
+    if (validItems.length === 0) {
+      return res.status(400).json({ 
+        error: '没有可导入的有效预约', 
+        items: results 
+      });
+    }
+
+    const importTx = db.transaction(() => {
+      let imported = 0;
+      const importResults = [];
+
+      for (const validated of validItems) {
+        const originalItem = appointments[validated.index - 1];
+        try {
+          const createResult = validateAndCreateAppointment({
+            item_id: validated.item_id,
+            user_name: originalItem.user_name.trim(),
+            phone: originalItem.phone.trim(),
+            appointment_date: originalItem.appointment_date.trim(),
+            time_slot: originalItem.time_slot.trim(),
+            source: 'admin_batch',
+            operator_name: '管理员(批量导入)',
+            window_id: validated.window_id
+          });
+          imported++;
+          importResults.push({
+            index: validated.index,
+            success: true,
+            id: createResult.id,
+            queue_number: createResult.queue_number,
+            window_name: createResult.window_name
+          });
+        } catch (e) {
+          importResults.push({
+            index: validated.index,
+            success: false,
+            error: e.message
+          });
+        }
+      }
+
+      return { imported, importResults };
+    });
+
+    const txResult = importTx();
+
+    const finalItems = results.map(r => {
+      const importResult = txResult.importResults.find(ir => ir.index === r.index);
+      if (importResult) {
+        if (importResult.success) {
+          return { ...r, import_status: 'success', queue_number: importResult.queue_number, window_name: importResult.window_name };
+        } else {
+          return { ...r, status: 'error', message: importResult.error, import_status: 'failed' };
+        }
+      }
+      return { ...r, import_status: r.status === 'error' ? 'skipped' : 'pending' };
+    });
+
+    res.json({
+      success: true,
+      imported: txResult.imported,
+      total: appointments.length,
+      items: finalItems
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: '批量导入失败' });
+  }
+});
+
 app.get('/api/appointments', (req, res) => {
   const { date, item_id, status, phone } = req.query;
 
@@ -2860,8 +3217,8 @@ app.get('/api/analytics/overview', (req, res) => {
   const totalCount = totalRow.count;
 
   const statusCounts = db.prepare(`
-    SELECT status, COUNT(*) as count 
-    FROM appointments 
+    SELECT status, COUNT(*) as count
+    FROM appointments
     WHERE ${aptWhereSql}
     GROUP BY status
   `).all(...aptParams);
@@ -2933,7 +3290,7 @@ app.get('/api/analytics/items', (req, res) => {
   }
 
   const items = db.prepare(`
-    SELECT 
+    SELECT
       i.id,
       i.name,
       COUNT(a.id) as total_count,
@@ -2941,8 +3298,8 @@ app.get('/api/analytics/items', (req, res) => {
       SUM(CASE WHEN a.status = 'cancelled' THEN 1 ELSE 0 END) as cancelled_count,
       SUM(CASE WHEN a.status = 'no_show' THEN 1 ELSE 0 END) as no_show_count
     FROM items i
-    LEFT JOIN appointments a ON i.id = a.item_id 
-      AND a.appointment_date >= ? 
+    LEFT JOIN appointments a ON i.id = a.item_id
+      AND a.appointment_date >= ?
       AND a.appointment_date <= ?
     GROUP BY i.id, i.name
     ORDER BY total_count DESC, i.id ASC

@@ -1233,6 +1233,215 @@ async function confirmBatchHoliday() {
     }
 }
 
+let batchAppointmentData = [];
+let batchAppointmentPreviewData = [];
+
+function openBatchImportAppointmentModal() {
+    document.getElementById('batchAppointmentInput').value = '';
+    document.getElementById('batchAppointmentPreview').style.display = 'none';
+    document.getElementById('btnConfirmBatchAppointment').disabled = true;
+    batchAppointmentData = [];
+    batchAppointmentPreviewData = [];
+    document.getElementById('batchImportAppointmentModal').classList.add('show');
+}
+
+function parseBatchAppointmentInput() {
+    const text = document.getElementById('batchAppointmentInput').value.trim();
+    if (!text) {
+        showToast('请输入预约数据', 'error');
+        return [];
+    }
+
+    const lines = text.split('\n').filter(line => line.trim());
+    const results = [];
+
+    lines.forEach((line, index) => {
+        const trimmedLine = line.trim();
+        const parts = trimmedLine.split(',');
+        
+        const item_name = parts[0]?.trim() || '';
+        const user_name = parts[1]?.trim() || '';
+        const phone = parts[2]?.trim() || '';
+        const appointment_date = parts[3]?.trim() || '';
+        const time_slot = parts[4]?.trim() || '';
+        const window_name = parts.slice(5).join(',').trim() || '';
+
+        results.push({
+            line: index + 1,
+            item_name,
+            user_name,
+            phone,
+            appointment_date,
+            time_slot,
+            window_name
+        });
+    });
+
+    return results;
+}
+
+async function previewBatchAppointment() {
+    const parsedData = parseBatchAppointmentInput();
+    if (parsedData.length === 0) return;
+
+    batchAppointmentData = parsedData;
+
+    try {
+        const res = await fetch(`${API_BASE}/admin/appointments/batch/preview`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ appointments: parsedData })
+        });
+
+        const data = await res.json();
+        if (!res.ok) {
+            throw new Error(data.error || '预览校验失败');
+        }
+
+        batchAppointmentPreviewData = data.items;
+
+        const summaryEl = document.getElementById('batchAppointmentSummary');
+        summaryEl.innerHTML = `
+            共 ${data.total} 条记录，
+            <span class="success-count">正常 ${data.success_count} 条</span>，
+            <span class="warn-count">警告 ${data.warn_count} 条</span>，
+            <span class="error-count">错误 ${data.error_count} 条</span>
+        `;
+
+        const tbody = document.getElementById('batchAppointmentPreviewList');
+        tbody.innerHTML = data.items.map(item => {
+            let statusClass = '';
+            let statusText = '';
+            if (item.status === 'ok') {
+                statusClass = 'status-ok';
+                statusText = '✓ 可导入';
+            } else if (item.status === 'warn') {
+                statusClass = 'status-warn';
+                statusText = `⚠ ${item.message}`;
+            } else {
+                statusClass = 'status-error';
+                statusText = `✗ ${item.message}`;
+            }
+            return `
+                <tr>
+                    <td>${item.index}</td>
+                    <td>${escapeHtml(item.item_name) || '-'}</td>
+                    <td>${escapeHtml(item.user_name) || '-'}</td>
+                    <td>${escapeHtml(item.phone) || '-'}</td>
+                    <td>${escapeHtml(item.appointment_date) || '-'}</td>
+                    <td>${escapeHtml(item.time_slot) || '-'}</td>
+                    <td>${escapeHtml(item.window_name) || '自动分配'}</td>
+                    <td class="${statusClass}">${statusText}</td>
+                </tr>
+            `;
+        }).join('');
+
+        document.getElementById('batchAppointmentPreview').style.display = 'block';
+        document.getElementById('btnConfirmBatchAppointment').disabled = data.valid_count === 0;
+    } catch (e) {
+        showToast(e.message, 'error');
+    }
+}
+
+async function confirmBatchAppointment() {
+    if (batchAppointmentData.length === 0) {
+        showToast('没有可导入的记录', 'error');
+        return;
+    }
+
+    try {
+        const res = await fetch(`${API_BASE}/admin/appointments/batch`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ appointments: batchAppointmentData })
+        });
+
+        const data = await res.json();
+        if (!res.ok) {
+            if (data.items) {
+                batchAppointmentPreviewData = data.items;
+                const tbody = document.getElementById('batchAppointmentPreviewList');
+                tbody.innerHTML = data.items.map(item => {
+                    let statusClass = '';
+                    let statusText = '';
+                    if (item.import_status === 'success') {
+                        statusClass = 'status-ok';
+                        statusText = `✓ 导入成功（号${item.queue_number || ''}）`;
+                    } else if (item.status === 'error') {
+                        statusClass = 'status-error';
+                        statusText = `✗ ${item.message}`;
+                    } else {
+                        statusClass = 'status-warn';
+                        statusText = `⚠ 跳过`;
+                    }
+                    return `
+                        <tr>
+                            <td>${item.index}</td>
+                            <td>${escapeHtml(item.item_name) || '-'}</td>
+                            <td>${escapeHtml(item.user_name) || '-'}</td>
+                            <td>${escapeHtml(item.phone) || '-'}</td>
+                            <td>${escapeHtml(item.appointment_date) || '-'}</td>
+                            <td>${escapeHtml(item.time_slot) || '-'}</td>
+                            <td>${escapeHtml(item.window_name || item.window_name) || '自动分配'}</td>
+                            <td class="${statusClass}">${statusText}</td>
+                        </tr>
+                    `;
+                }).join('');
+
+                const summaryEl = document.getElementById('batchAppointmentSummary');
+                summaryEl.innerHTML = `
+                    共 ${data.total} 条记录，
+                    <span class="success-count">成功导入 ${data.imported} 条</span>
+                `;
+            }
+            throw new Error(data.error || '批量导入失败');
+        }
+
+        if (data.items) {
+            batchAppointmentPreviewData = data.items;
+            const tbody = document.getElementById('batchAppointmentPreviewList');
+            tbody.innerHTML = data.items.map(item => {
+                let statusClass = '';
+                let statusText = '';
+                if (item.import_status === 'success') {
+                    statusClass = 'status-ok';
+                    statusText = `✓ 导入成功（号${item.queue_number || ''}）`;
+                } else if (item.import_status === 'failed') {
+                    statusClass = 'status-error';
+                    statusText = `✗ ${item.message || '导入失败'}`;
+                } else {
+                    statusClass = 'status-error';
+                    statusText = `✗ ${item.message || '跳过'}`;
+                }
+                return `
+                    <tr>
+                        <td>${item.index}</td>
+                        <td>${escapeHtml(item.item_name) || '-'}</td>
+                        <td>${escapeHtml(item.user_name) || '-'}</td>
+                        <td>${escapeHtml(item.phone) || '-'}</td>
+                        <td>${escapeHtml(item.appointment_date) || '-'}</td>
+                        <td>${escapeHtml(item.time_slot) || '-'}</td>
+                        <td>${escapeHtml(item.window_name || '') || '自动分配'}</td>
+                        <td class="${statusClass}">${statusText}</td>
+                    </tr>
+                `;
+            }).join('');
+
+            const summaryEl = document.getElementById('batchAppointmentSummary');
+            summaryEl.innerHTML = `
+                共 ${data.total} 条记录，
+                <span class="success-count">成功导入 ${data.imported} 条</span>
+            `;
+        }
+
+        showToast(`成功导入 ${data.imported} 条预约`, 'success');
+        document.getElementById('btnConfirmBatchAppointment').disabled = true;
+        loadAppointments();
+    } catch (e) {
+        showToast(e.message, 'error');
+    }
+}
+
 async function loadReminders() {
     await searchReminders();
 }
@@ -2808,6 +3017,13 @@ function initModals() {
     document.getElementById('btnSaveAddApt').addEventListener('click', saveAddAppointment);
     document.getElementById('addAptItem').addEventListener('change', loadAddAptTimeSlotsAndWindows);
     document.getElementById('addAptDate').addEventListener('change', loadAddAptTimeSlotsAndWindows);
+
+    document.getElementById('btnBatchImportAppointment').addEventListener('click', openBatchImportAppointmentModal);
+    document.getElementById('btnCancelBatchAppointment').addEventListener('click', () => {
+        document.getElementById('batchImportAppointmentModal').classList.remove('show');
+    });
+    document.getElementById('btnPreviewBatchAppointment').addEventListener('click', previewBatchAppointment);
+    document.getElementById('btnConfirmBatchAppointment').addEventListener('click', confirmBatchAppointment);
 
     document.getElementById('btnSearchReminder').addEventListener('click', () => {
         state.reminderPage = 1;
