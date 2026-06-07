@@ -1797,6 +1797,27 @@ function removeTimeSlot(index) {
 async function saveSlot() {
     const { itemId, date, mode, useWindows, useTimeSlots } = state.slotModalData;
 
+    async function clearTimeSlotsBeforeModeSwitch(message) {
+        if (!confirm(message)) {
+            return false;
+        }
+
+        const res = await fetch(`${API_BASE}/slots/${itemId}/${date}/time-slots`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ time_slots: [] })
+        });
+
+        const data = await res.json();
+        if (!res.ok) {
+            throw new Error(data.error || '清除分时段配置失败');
+        }
+
+        state.slotModalData.useTimeSlots = false;
+        state.editingTimeSlots = [];
+        return true;
+    }
+
     if (mode === 'time') {
         if (state.editingTimeSlots.length === 0) {
             showToast('请至少添加一个时段', 'error');
@@ -1855,17 +1876,12 @@ async function saveSlot() {
         }
     } else if (useWindows) {
         if (useTimeSlots) {
-            if (!confirm('保存窗口号源将清除分时段配置，确定要继续吗？')) {
-                return;
-            }
             try {
-                await fetch(`${API_BASE}/slots/${itemId}/${date}/time-slots`, {
-                    method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ time_slots: [] })
-                });
+                const cleared = await clearTimeSlotsBeforeModeSwitch('保存窗口号源将清除分时段配置，确定要继续吗？');
+                if (!cleared) return;
             } catch (e) {
-                console.error('清除分时段数据失败', e);
+                showToast(e.message, 'error');
+                return;
             }
         }
 
@@ -1907,17 +1923,12 @@ async function saveSlot() {
         }
     } else {
         if (useTimeSlots) {
-            if (!confirm('保存每日号源将清除分时段配置，确定要继续吗？')) {
-                return;
-            }
             try {
-                await fetch(`${API_BASE}/slots/${itemId}/${date}/time-slots`, {
-                    method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ time_slots: [] })
-                });
+                const cleared = await clearTimeSlotsBeforeModeSwitch('保存每日号源将清除分时段配置，确定要继续吗？');
+                if (!cleared) return;
             } catch (e) {
-                console.error('清除分时段数据失败', e);
+                showToast(e.message, 'error');
+                return;
             }
         }
 

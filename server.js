@@ -1625,7 +1625,29 @@ app.put('/api/slots/:itemId/:date/time-slots', (req, res) => {
     return res.status(400).json({ error: '日期格式不正确' });
   }
 
+  const countActiveTimeSlotAppointments = (startTime, endTime) => {
+    return db.prepare(`
+      SELECT COUNT(*) as cnt FROM appointments
+      WHERE item_id = ? AND appointment_date = ?
+      AND time_slot = ? AND status != 'cancelled'
+    `).get(itemId, date, `${startTime}-${endTime}`).cnt;
+  };
+
   if (!Array.isArray(time_slots) || time_slots.length === 0) {
+    const activeCount = db.prepare(`
+      SELECT COUNT(*) as cnt FROM appointments a
+      JOIN time_slot_capacities tsc
+        ON a.item_id = tsc.item_id
+       AND a.appointment_date = tsc.date
+       AND a.time_slot = tsc.start_time || '-' || tsc.end_time
+      WHERE tsc.item_id = ? AND tsc.date = ?
+      AND a.status != 'cancelled'
+    `).get(itemId, date).cnt;
+
+    if (activeCount > 0) {
+      return res.status(400).json({ error: '已有预约的分时段配置不能清除，请先取消相关预约或保留分时段模式' });
+    }
+
     db.prepare('DELETE FROM time_slot_capacities WHERE item_id = ? AND date = ?').run(itemId, date);
     return res.json({ success: true, time_slots: [], use_time_slots: false });
   }
@@ -1670,7 +1692,8 @@ app.put('/api/slots/:itemId/:date/time-slots', (req, res) => {
     for (const existing of existingSlots) {
       const key = `${existing.start_time}-${existing.end_time}`;
       if (!newSlotKeys.has(key)) {
-        if (existing.current_count > 0) {
+        const usedCount = countActiveTimeSlotAppointments(existing.start_time, existing.end_time);
+        if (usedCount > 0) {
           throw new Error(`时段 ${existing.start_time}-${existing.end_time} 已有预约，无法删除`);
         }
         db.prepare('DELETE FROM time_slot_capacities WHERE id = ?').run(existing.id);
@@ -1681,21 +1704,23 @@ app.put('/api/slots/:itemId/:date/time-slots', (req, res) => {
       const key = `${ts.start_time}-${ts.end_time}`;
       const existing = existingMap.get(key);
       const maxCount = parseInt(ts.max_count);
+      const usedCount = countActiveTimeSlotAppointments(ts.start_time, ts.end_time);
+
+      if (maxCount < usedCount) {
+        throw new Error(`时段 ${ts.start_time}-${ts.end_time} 的容量不能小于已预约数量 ${usedCount}`);
+      }
 
       if (existing) {
-        if (maxCount < existing.current_count) {
-          throw new Error(`时段 ${ts.start_time}-${ts.end_time} 的容量不能小于已预约数量 ${existing.current_count}`);
-        }
         db.prepare(`
           UPDATE time_slot_capacities 
-          SET max_count = ?, sort_order = ?
+          SET max_count = ?, current_count = ?, sort_order = ?
           WHERE id = ?
-        `).run(maxCount, index, existing.id);
+        `).run(maxCount, usedCount, index, existing.id);
       } else {
         db.prepare(`
           INSERT INTO time_slot_capacities (item_id, date, start_time, end_time, max_count, current_count, sort_order)
-          VALUES (?, ?, ?, ?, ?, 0, ?)
-        `).run(itemId, date, ts.start_time, ts.end_time, maxCount, index);
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+        `).run(itemId, date, ts.start_time, ts.end_time, maxCount, usedCount, index);
       }
     });
   });
