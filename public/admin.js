@@ -31,7 +31,9 @@ const state = {
     workstation: {
         selectedWindowId: null,
         queueData: null,
-        refreshTimer: null
+        refreshTimer: null,
+        sseSource: null,
+        sseConnected: false
     }
 };
 
@@ -209,6 +211,10 @@ function switchTab(tab) {
 
     if (state.currentTab !== 'window-workstation' && state.workstation.refreshTimer) {
         stopWorkstationAutoRefresh();
+    }
+
+    if (state.currentTab !== 'window-workstation' && state.workstation.sseSource) {
+        disconnectWorkstationSSE();
     }
 }
 
@@ -2237,11 +2243,15 @@ async function loadWindowWorkstation() {
                     state.workstation.selectedWindowId = parseInt(windowId);
                     document.getElementById('workstationContent').style.display = 'block';
                     loadWindowQueue();
-                    startWorkstationAutoRefresh();
+                    startWorkstationSSE();
+                    if (!state.workstation.sseConnected) {
+                        startWorkstationAutoRefresh();
+                    }
                 } else {
                     state.workstation.selectedWindowId = null;
                     document.getElementById('workstationContent').style.display = 'none';
                     stopWorkstationAutoRefresh();
+                    stopWorkstationSSE();
                 }
             });
             state.workstation._listenerBound = true;
@@ -2251,7 +2261,10 @@ async function loadWindowWorkstation() {
             select.value = state.workstation.selectedWindowId;
             document.getElementById('workstationContent').style.display = 'block';
             loadWindowQueue();
-            startWorkstationAutoRefresh();
+            startWorkstationSSE();
+            if (!state.workstation.sseConnected) {
+                startWorkstationAutoRefresh();
+            }
         }
     } catch (e) {
         showToast('加载窗口列表失败', 'error');
@@ -2350,6 +2363,55 @@ function stopWorkstationAutoRefresh() {
         clearInterval(state.workstation.refreshTimer);
         state.workstation.refreshTimer = null;
     }
+}
+
+function startWorkstationSSE() {
+    if (typeof EventSource === 'undefined') {
+        return;
+    }
+
+    stopWorkstationSSE();
+
+    try {
+        state.workstation.sseSource = new EventSource(`${API_BASE}/events/stream`);
+
+        state.workstation.sseSource.addEventListener('connected', () => {
+            state.workstation.sseConnected = true;
+            stopWorkstationAutoRefresh();
+        });
+
+        state.workstation.sseSource.addEventListener('board_update', (event) => {
+            if (state.currentTab === 'window-workstation' && state.workstation.selectedWindowId) {
+                loadWindowQueue();
+            }
+        });
+
+        state.workstation.sseSource.addEventListener('heartbeat', () => {
+            state.workstation.sseConnected = true;
+        });
+
+        state.workstation.sseSource.addEventListener('error', () => {
+            if (state.workstation.sseConnected) {
+                state.workstation.sseConnected = false;
+                startWorkstationAutoRefresh();
+            }
+        });
+
+    } catch (e) {
+        state.workstation.sseConnected = false;
+    }
+}
+
+function stopWorkstationSSE() {
+    if (state.workstation.sseSource) {
+        state.workstation.sseSource.close();
+        state.workstation.sseSource = null;
+    }
+    state.workstation.sseConnected = false;
+}
+
+function disconnectWorkstationSSE() {
+    stopWorkstationSSE();
 }
 
 async function wsCallNext() {

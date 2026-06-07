@@ -1,5 +1,6 @@
 const API_BASE = '/api';
 const REFRESH_INTERVAL = 30 * 1000;
+const SSE_RECONNECT_DELAY = 3000;
 
 let boardData = null;
 let windowBoardData = null;
@@ -8,6 +9,29 @@ let previousCallingIds = new Set();
 let previousWindowCallingIds = new Set();
 let refreshTimer = null;
 let timeTimer = null;
+let sseSource = null;
+let sseConnected = false;
+let sseReconnectTimer = null;
+let sseSupported = typeof EventSource !== 'undefined';
+
+function updateConnectionStatus() {
+    const statusEl = document.getElementById('connectionStatus');
+    if (!statusEl) return;
+
+    if (sseSupported && sseConnected) {
+        statusEl.className = 'connection-status status-online';
+        statusEl.textContent = '● 实时连接';
+        statusEl.title = '实时更新中';
+    } else if (sseSupported && !sseConnected) {
+        statusEl.className = 'connection-status status-reconnecting';
+        statusEl.textContent = '● 重连中...';
+        statusEl.title = '连接断开，正在重连，已降级为轮询';
+    } else {
+        statusEl.className = 'connection-status status-polling';
+        statusEl.textContent = '● 轮询模式';
+        statusEl.title = '浏览器不支持实时连接，使用轮询模式';
+    }
+}
 
 function formatDate(date) {
     const year = date.getFullYear();
@@ -514,7 +538,13 @@ function renderWindowCard(win) {
 function startAutoRefresh() {
     if (refreshTimer) {
         clearInterval(refreshTimer);
+        refreshTimer = null;
     }
+
+    if (sseSupported && sseConnected) {
+        return;
+    }
+
     refreshTimer = setInterval(() => {
         if (currentView === 'item') {
             loadBoardData();
@@ -524,6 +554,106 @@ function startAutoRefresh() {
     }, REFRESH_INTERVAL);
 }
 
+function connectSSE() {
+    if (!sseSupported) {
+        return;
+    }
+
+    if (sseSource) {
+        sseSource.close();
+        sseSource = null;
+    }
+
+    try {
+        sseSource = new EventSource(`${API_BASE}/events/stream`);
+
+        sseSource.addEventListener('open', () => {
+        });
+
+        sseSource.addEventListener('connected', (event) => {
+            sseConnected = true;
+            updateConnectionStatus();
+            stopPollingFallback();
+            refreshBoard();
+        });
+
+        sseSource.addEventListener('board_update', (event) => {
+            try {
+                const data = JSON.parse(event.data);
+                if (data && data.type) {
+                    refreshBoard();
+                }
+            } catch (e) {
+                refreshBoard();
+            }
+        });
+
+        sseSource.addEventListener('heartbeat', () => {
+            sseConnected = true;
+            updateConnectionStatus();
+        });
+
+        sseSource.addEventListener('error', () => {
+            if (sseConnected) {
+                sseConnected = false;
+                updateConnectionStatus();
+                startPollingFallback();
+            }
+
+            if (sseSource && sseSource.readyState === EventSource.CLOSED) {
+                scheduleSseReconnect();
+            }
+        });
+
+    } catch (e) {
+        sseSupported = false;
+        sseConnected = false;
+        updateConnectionStatus();
+        startPollingFallback();
+    }
+}
+
+function scheduleSseReconnect() {
+    if (sseReconnectTimer) {
+        clearTimeout(sseReconnectTimer);
+    }
+    sseReconnectTimer = setTimeout(() => {
+        if (sseSupported) {
+            connectSSE();
+        }
+    }, SSE_RECONNECT_DELAY);
+}
+
+function startPollingFallback() {
+    stopPollingFallback();
+    refreshTimer = setInterval(() => {
+        if (currentView === 'item') {
+            loadBoardData();
+        } else {
+            loadWindowBoardData();
+        }
+    }, REFRESH_INTERVAL);
+}
+
+function stopPollingFallback() {
+    if (refreshTimer) {
+        clearInterval(refreshTimer);
+        refreshTimer = null;
+    }
+}
+
+function disconnectSSE() {
+    if (sseSource) {
+        sseSource.close();
+        sseSource = null;
+    }
+    if (sseReconnectTimer) {
+        clearTimeout(sseReconnectTimer);
+        sseReconnectTimer = null;
+    }
+    sseConnected = false;
+}
+
 function startTimeUpdate() {
     updateDateTime();
     timeTimer = setInterval(updateDateTime, 1000);
@@ -531,8 +661,10 @@ function startTimeUpdate() {
 
 function init() {
     startTimeUpdate();
+    updateConnectionStatus();
     loadBoardData();
     startAutoRefresh();
+    connectSSE();
 }
 
 window.refreshBoard = refreshBoard;

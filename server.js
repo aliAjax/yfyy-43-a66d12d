@@ -496,6 +496,63 @@ function countActiveAppointments(phone, itemId) {
   ).get(phone, itemId).cnt;
 }
 
+const sseClients = new Map();
+let sseClientIdCounter = 0;
+const SSE_HEARTBEAT_INTERVAL = 15000;
+
+function broadcastBoardEvent(eventType, eventData) {
+  const payload = {
+    type: eventType,
+    timestamp: Date.now(),
+    data: eventData || {}
+  };
+  const sseMessage = `event: board_update\ndata: ${JSON.stringify(payload)}\n\n`;
+
+  for (const client of sseClients.values()) {
+    try {
+      client.res.write(sseMessage);
+    } catch (e) {
+    }
+  }
+}
+
+app.get('/api/events/stream', (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+
+  const clientId = ++sseClientIdCounter;
+  const client = {
+    id: clientId,
+    res: res,
+    connectedAt: Date.now()
+  };
+  sseClients.set(clientId, client);
+
+  const heartbeat = setInterval(() => {
+    if (sseClients.has(clientId)) {
+      try {
+        res.write(`event: heartbeat\ndata: ${JSON.stringify({ timestamp: Date.now(), client_count: sseClients.size })}\n\n`);
+      } catch (e) {
+        clearInterval(heartbeat);
+        sseClients.delete(clientId);
+      }
+    } else {
+      clearInterval(heartbeat);
+    }
+  }, SSE_HEARTBEAT_INTERVAL);
+
+  client.heartbeat = heartbeat;
+
+  res.write(`event: connected\ndata: ${JSON.stringify({ client_id: clientId, timestamp: Date.now() })}\n\n`);
+
+  req.on('close', () => {
+    clearInterval(heartbeat);
+    sseClients.delete(clientId);
+  });
+});
+
 app.get('/api/items', (req, res) => {
   const items = db.prepare('SELECT * FROM items ORDER BY id').all();
   res.json(items);
@@ -2155,6 +2212,12 @@ app.post('/api/appointments/:id/cancel', (req, res) => {
   createReminder(id, appointment.phone, 'cancelled', reminderContent);
 
   res.json({ success: true, message: '预约已取消，号源已释放' });
+
+  broadcastBoardEvent('cancelled', {
+    appointment_id: id,
+    item_id: appointment.item_id,
+    appointment_date: appointment.appointment_date
+  });
 });
 
 app.put('/api/appointments/:id/status', (req, res) => {
@@ -2330,6 +2393,16 @@ app.put('/api/appointments/:id/status', (req, res) => {
     auto_restriction: autoRestriction,
     restriction_removed: restrictionRemoved
   });
+
+  if (oldStatus !== status) {
+    broadcastBoardEvent('status_change', {
+      appointment_id: id,
+      old_status: oldStatus,
+      new_status: status,
+      item_id: appointment.item_id,
+      appointment_date: appointment.appointment_date
+    });
+  }
 });
 
 function getNoShowCount(phone) {
@@ -3079,6 +3152,12 @@ app.post('/api/appointments/:id/call', (req, res) => {
   try {
     tx();
     res.json({ success: true, message: '叫号成功' });
+
+    broadcastBoardEvent('calling', {
+      appointment_id: appointment.id,
+      item_id: appointment.item_id,
+      appointment_date: appointment.appointment_date
+    });
   } catch (e) {
     if (!res.headersSent) {
       if (e.message === '该事项已有正在叫号的预约') {
@@ -3154,6 +3233,12 @@ app.post('/api/appointments/:id/next', (req, res) => {
       next_appointment: result.next,
       message: result.has_next ? '已叫下一号' : '当前已是最后一位'
     });
+
+    broadcastBoardEvent('next', {
+      item_id: currentApt.item_id,
+      appointment_date: currentApt.appointment_date,
+      has_next: result.has_next
+    });
   } catch (e) {
     res.status(500).json({ error: '操作失败' });
   }
@@ -3213,6 +3298,12 @@ app.post('/api/items/:itemId/call-next', (req, res) => {
   try {
     tx();
     res.json({ success: true, has_next: true, appointment: nextApt, message: '叫号成功' });
+
+    broadcastBoardEvent('calling', {
+      appointment_id: nextApt.id,
+      item_id: itemId,
+      appointment_date: today
+    });
   } catch (e) {
     if (e.message === '该事项已有正在叫号的预约') {
       res.status(400).json({ error: e.message });
@@ -4079,6 +4170,13 @@ app.post('/api/appointments/:id/reschedule', (req, res) => {
       message: '改期成功',
       appointment: updatedAppointment
     });
+
+    broadcastBoardEvent('rescheduled', {
+      appointment_id: id,
+      item_id: appointment.item_id,
+      old_date: appointment.appointment_date,
+      new_date: new_date
+    });
   } catch (e) {
     if (e.message === '预约状态已变更，无法改期' || 
         e.message === '新时段号源已满，请重新选择' ||
@@ -4312,6 +4410,13 @@ app.post('/api/windows/:windowId/call-next', (req, res) => {
   try {
     tx();
     res.json({ success: true, has_next: true, appointment: nextApt, message: '叫号成功' });
+
+    broadcastBoardEvent('calling', {
+      appointment_id: nextApt.id,
+      item_id: nextApt.item_id,
+      window_id: windowId,
+      appointment_date: today
+    });
   } catch (e) {
     if (e.message === '该窗口已有正在叫号的预约' || e.message === '该事项已有正在叫号的预约') {
       res.status(400).json({ error: e.message });
@@ -4353,6 +4458,13 @@ app.post('/api/windows/:windowId/complete', (req, res) => {
   createReminder(currentApt.id, currentApt.phone, 'completed', reminderContent);
 
   res.json({ success: true, message: '办理完成', completed_appointment: currentApt });
+
+  broadcastBoardEvent('completed', {
+    appointment_id: currentApt.id,
+    item_id: currentApt.item_id,
+    window_id: windowId,
+    appointment_date: today
+  });
 });
 
 app.post('/api/windows/:windowId/skip', (req, res) => {
@@ -4426,6 +4538,13 @@ app.post('/api/windows/:windowId/skip', (req, res) => {
       message: result.has_next
         ? '已跳过，叫下一位'
         : (result.blocked_by_item_calling ? '已跳过，暂无可叫下一位（其他事项正在叫号中）' : '已跳过，暂无下一位')
+    });
+
+    broadcastBoardEvent('skip', {
+      window_id: windowId,
+      item_id: currentApt.item_id,
+      appointment_date: today,
+      has_next: result.has_next
     });
   } catch (e) {
     res.status(500).json({ error: '操作失败' });

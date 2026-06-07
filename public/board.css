@@ -677,9 +677,41 @@ body {
 
 .footer-info {
     display: flex;
-    gap: 30px;
+    gap: 15px;
+    align-items: center;
     color: rgba(255, 255, 255, 0.6);
     font-size: 14px;
+}
+
+.footer-divider {
+    color: rgba(255, 255, 255, 0.2);
+}
+
+.connection-status {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: 500;
+    transition: color 0.3s ease;
+}
+
+.connection-status.status-online {
+    color: #4ade80;
+    text-shadow: 0 0 8px rgba(74, 222, 128, 0.4);
+}
+
+.connection-status.status-reconnecting {
+    color: #fbbf24;
+    animation: pulse 1.5s ease-in-out infinite;
+}
+
+.connection-status.status-polling {
+    color: rgba(255, 255, 255, 0.5);
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
 }
 
 .refresh-hint,
