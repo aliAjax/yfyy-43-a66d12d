@@ -4,6 +4,8 @@ const state = {
     selectedItemMaterials: [],
     selectedDate: null,
     selectedTimeSlot: null,
+    timeSlots: [],
+    slotMode: 'window',
     currentWeekOffset: 0,
     currentAppointment: null,
     currentRating: 0,
@@ -208,6 +210,7 @@ async function loadTimeSlots() {
     section.style.display = 'block';
 
     document.getElementById('timeSlots').innerHTML = '<div class="loading">加载时段中...</div>';
+    state.selectedTimeSlot = null;
 
     try {
         const res = await fetch(`${API_BASE}/slots/${state.selectedItem.id}/${state.selectedDate}`);
@@ -223,7 +226,15 @@ async function loadTimeSlots() {
             return;
         }
 
-        renderTimeSlots(data.time_slots);
+        if (data.use_time_slots && data.time_slots && data.time_slots.length > 0) {
+            state.slotMode = 'time';
+            state.timeSlots = data.time_slots;
+            renderTimeSlotCapacities(data.time_slots);
+        } else {
+            state.slotMode = 'window';
+            state.timeSlots = data.time_slots || [];
+            renderTimeSlots(data.time_slots || []);
+        }
     } catch (e) {
         document.getElementById('timeSlots').innerHTML = '<div class="empty-state"><p>加载失败</p></div>';
     }
@@ -259,12 +270,62 @@ function renderTimeSlots(slots) {
     });
 }
 
+function renderTimeSlotCapacities(timeSlots) {
+    const container = document.getElementById('timeSlots');
+    
+    const allFull = timeSlots.every(ts => ts.current_count >= ts.max_count);
+    if (allFull) {
+        container.innerHTML = `
+            <div class="empty-state">
+                <div class="empty-icon">⏰</div>
+                <p>今日号源已满，请选择其他日期</p>
+            </div>
+        `;
+        return;
+    }
+
+    container.innerHTML = timeSlots.map(ts => {
+        const remaining = ts.max_count - ts.current_count;
+        const isFull = remaining <= 0;
+        const isSelected = state.selectedTimeSlot === `${ts.start_time}-${ts.end_time}`;
+        
+        return `
+            <div class="time-slot-capacity ${isFull ? 'disabled' : ''} ${isSelected ? 'selected' : ''}"
+                 data-start="${ts.start_time}" data-end="${ts.end_time}" data-key="${ts.start_time}-${ts.end_time}">
+                <div class="tsc-time">${ts.start_time} - ${ts.end_time}</div>
+                <div class="tsc-info">
+                    <span class="tsc-remaining ${remaining <= 3 && remaining > 0 ? 'few' : ''}">
+                        ${isFull ? '已满' : `剩余 ${remaining} 个`}
+                    </span>
+                    <span class="tsc-total">共 ${ts.max_count} 个</span>
+                </div>
+            </div>
+        `;
+    }).join('');
+
+    container.querySelectorAll('.time-slot-capacity:not(.disabled)').forEach(item => {
+        item.addEventListener('click', () => {
+            const key = item.dataset.key;
+            state.selectedTimeSlot = key;
+            renderTimeSlotCapacities(timeSlots);
+            setTimeout(() => goToStep(3), 300);
+        });
+    });
+}
+
 function renderBookingSummary() {
     const summary = document.getElementById('bookingSummary');
+    let timeDisplay = state.selectedTimeSlot || '';
+    
+    if (state.slotMode === 'time' && state.selectedTimeSlot) {
+        const [start, end] = state.selectedTimeSlot.split('-');
+        timeDisplay = `${start} - ${end}`;
+    }
+    
     summary.innerHTML = `
         <p><strong>办理事项：</strong>${state.selectedItem?.name || ''}</p>
         <p><strong>预约日期：</strong>${state.selectedDate || ''}</p>
-        <p><strong>预约时段：</strong>${state.selectedTimeSlot || ''}</p>
+        <p><strong>预约时段：</strong>${timeDisplay}</p>
     `;
 }
 

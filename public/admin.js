@@ -22,6 +22,7 @@ const state = {
     editingWindowId: null,
     editingItemWindows: [],
     slotModalData: null,
+    editingTimeSlots: [],
     confirmCallback: null
 };
 
@@ -1556,7 +1557,8 @@ async function toggleWindowStatus(id, status) {
 
 function openSlotModal(itemId, itemName) {
     const today = formatDate(new Date());
-    state.slotModalData = { itemId, itemName, date: today, useWindows: false, windowSlots: [] };
+    state.slotModalData = { itemId, itemName, date: today, useWindows: false, useTimeSlots: false, windowSlots: [], mode: 'total' };
+    state.editingTimeSlots = [];
 
     document.getElementById('slotInfo').innerHTML = `
         <p><strong>事项：</strong>${escapeHtml(itemName)}</p>
@@ -1566,6 +1568,7 @@ function openSlotModal(itemId, itemName) {
 
     document.getElementById('slotMaxCount').value = '';
     document.getElementById('slotTotalGroup').style.display = 'block';
+    document.getElementById('slotTimeGroup').style.display = 'none';
     document.getElementById('slotWindowsGroup').style.display = 'none';
     document.getElementById('slotModal').classList.add('show');
 
@@ -1575,6 +1578,30 @@ function openSlotModal(itemId, itemName) {
         state.slotModalData.date = e.target.value;
         loadSlotInfo(itemId, e.target.value);
     });
+
+    document.querySelectorAll('.slot-mode-tab').forEach(tab => {
+        tab.addEventListener('click', () => {
+            const mode = tab.dataset.mode;
+            state.slotModalData.mode = mode;
+
+            document.querySelectorAll('.slot-mode-tab').forEach(t => t.classList.remove('active'));
+            tab.classList.add('active');
+
+            if (mode === 'total') {
+                document.getElementById('slotTotalGroup').style.display = 'block';
+                document.getElementById('slotTimeGroup').style.display = 'none';
+                document.getElementById('slotWindowsGroup').style.display = 'none';
+            } else if (mode === 'time') {
+                document.getElementById('slotTotalGroup').style.display = 'none';
+                document.getElementById('slotTimeGroup').style.display = 'block';
+                document.getElementById('slotWindowsGroup').style.display = 'none';
+            }
+        });
+    });
+
+    document.getElementById('btnAddTimeSlot').addEventListener('click', () => {
+        addTimeSlot();
+    });
 }
 
 async function loadSlotInfo(itemId, date) {
@@ -1583,18 +1610,47 @@ async function loadSlotInfo(itemId, date) {
         const data = await res.json();
 
         state.slotModalData.useWindows = data.use_windows || false;
+        state.slotModalData.useTimeSlots = data.use_time_slots || false;
 
-        if (data.available !== undefined || data.use_windows) {
+        if (data.available !== undefined || data.use_windows || data.use_time_slots) {
             document.getElementById('slotCurrentCount').textContent = data.current_count || 0;
             document.getElementById('slotCurrentMax').textContent = data.max_count || 0;
 
-            if (data.use_windows && data.windows && data.windows.length > 0) {
-                state.slotModalData.windowSlots = data.windows;
+            if (data.use_time_slots && data.time_slots && data.time_slots.length > 0) {
+                state.slotModalData.mode = 'time';
+                state.editingTimeSlots = data.time_slots.map(ts => ({
+                    start_time: ts.start_time,
+                    end_time: ts.end_time,
+                    max_count: ts.max_count,
+                    current_count: ts.current_count,
+                    id: ts.id
+                }));
+
+                document.querySelectorAll('.slot-mode-tab').forEach(t => {
+                    t.classList.toggle('active', t.dataset.mode === 'time');
+                });
                 document.getElementById('slotTotalGroup').style.display = 'none';
+                document.getElementById('slotTimeGroup').style.display = 'block';
+                document.getElementById('slotWindowsGroup').style.display = 'none';
+                renderTimeSlotList();
+            } else if (data.use_windows && data.windows && data.windows.length > 0) {
+                state.slotModalData.windowSlots = data.windows;
+                state.slotModalData.mode = 'total';
+                document.querySelectorAll('.slot-mode-tab').forEach(t => {
+                    t.classList.toggle('active', t.dataset.mode === 'total');
+                });
+                document.getElementById('slotTotalGroup').style.display = 'none';
+                document.getElementById('slotTimeGroup').style.display = 'none';
                 document.getElementById('slotWindowsGroup').style.display = 'block';
                 renderSlotWindowList(data.windows);
             } else {
+                state.slotModalData.mode = 'total';
+                state.editingTimeSlots = [];
+                document.querySelectorAll('.slot-mode-tab').forEach(t => {
+                    t.classList.toggle('active', t.dataset.mode === 'total');
+                });
                 document.getElementById('slotTotalGroup').style.display = 'block';
+                document.getElementById('slotTimeGroup').style.display = 'none';
                 document.getElementById('slotWindowsGroup').style.display = 'none';
                 document.getElementById('slotMaxCount').value = data.max_count || 20;
             }
@@ -1623,10 +1679,154 @@ function renderSlotWindowList(windows) {
     `).join('');
 }
 
-async function saveSlot() {
-    const { itemId, date, useWindows } = state.slotModalData;
+function renderTimeSlotList() {
+    const container = document.getElementById('slotTimeList');
 
-    if (useWindows) {
+    if (state.editingTimeSlots.length === 0) {
+        container.innerHTML = `
+            <div class="empty-state-sm">
+                <span>暂无时段，点击上方按钮添加</span>
+            </div>
+        `;
+        return;
+    }
+
+    container.innerHTML = state.editingTimeSlots.map((ts, index) => `
+        <div class="time-slot-item" data-index="${index}">
+            <div class="time-slot-fields">
+                <div class="time-slot-field">
+                    <label>开始</label>
+                    <input type="time" class="ts-start" value="${ts.start_time || '09:00'}" data-index="${index}">
+                </div>
+                <div class="time-slot-field">
+                    <label>结束</label>
+                    <input type="time" class="ts-end" value="${ts.end_time || '10:00'}" data-index="${index}">
+                </div>
+                <div class="time-slot-field">
+                    <label>容量</label>
+                    <input type="number" class="ts-max" value="${ts.max_count || 10}" min="0" max="500" data-index="${index}">
+                </div>
+                ${ts.current_count !== undefined ? `
+                <div class="time-slot-field">
+                    <label>已约</label>
+                    <span class="ts-current">${ts.current_count || 0}</span>
+                </div>
+                ` : ''}
+            </div>
+            <button type="button" class="time-slot-delete" onclick="removeTimeSlot(${index})">×</button>
+        </div>
+    `).join('');
+
+    container.querySelectorAll('.ts-start').forEach(input => {
+        input.addEventListener('change', (e) => {
+            const index = parseInt(e.target.dataset.index);
+            state.editingTimeSlots[index].start_time = e.target.value;
+        });
+    });
+
+    container.querySelectorAll('.ts-end').forEach(input => {
+        input.addEventListener('change', (e) => {
+            const index = parseInt(e.target.dataset.index);
+            state.editingTimeSlots[index].end_time = e.target.value;
+        });
+    });
+
+    container.querySelectorAll('.ts-max').forEach(input => {
+        input.addEventListener('input', (e) => {
+            const index = parseInt(e.target.dataset.index);
+            state.editingTimeSlots[index].max_count = parseInt(e.target.value) || 0;
+        });
+    });
+}
+
+function addTimeSlot() {
+    const lastSlot = state.editingTimeSlots[state.editingTimeSlots.length - 1];
+    let startTime = '09:00';
+    let endTime = '10:00';
+
+    if (lastSlot && lastSlot.end_time) {
+        startTime = lastSlot.end_time;
+        const [h, m] = startTime.split(':').map(Number);
+        const endMinutes = h * 60 + m + 60;
+        const endH = Math.floor(endMinutes / 60);
+        const endM = endMinutes % 60;
+        if (endH < 17) {
+            endTime = `${endH.toString().padStart(2, '0')}:${endM.toString().padStart(2, '0')}`;
+        } else {
+            endTime = '17:00';
+        }
+    }
+
+    state.editingTimeSlots.push({
+        start_time: startTime,
+        end_time: endTime,
+        max_count: 10
+    });
+    renderTimeSlotList();
+}
+
+function removeTimeSlot(index) {
+    const ts = state.editingTimeSlots[index];
+    if (ts.current_count && ts.current_count > 0) {
+        showToast('该时段已有预约，无法删除', 'error');
+        return;
+    }
+    state.editingTimeSlots.splice(index, 1);
+    renderTimeSlotList();
+}
+
+async function saveSlot() {
+    const { itemId, date, mode, useWindows } = state.slotModalData;
+
+    if (mode === 'time') {
+        if (state.editingTimeSlots.length === 0) {
+            showToast('请至少添加一个时段', 'error');
+            return;
+        }
+
+        const timeRegex = /^\d{2}:\d{2}$/;
+        for (let i = 0; i < state.editingTimeSlots.length; i++) {
+            const ts = state.editingTimeSlots[i];
+            if (!ts.start_time || !timeRegex.test(ts.start_time)) {
+                showToast(`第 ${i + 1} 个时段的开始时间不正确`, 'error');
+                return;
+            }
+            if (!ts.end_time || !timeRegex.test(ts.end_time)) {
+                showToast(`第 ${i + 1} 个时段的结束时间不正确`, 'error');
+                return;
+            }
+            if (ts.start_time >= ts.end_time) {
+                showToast(`第 ${i + 1} 个时段的开始时间必须早于结束时间`, 'error');
+                return;
+            }
+            if (ts.max_count === undefined || ts.max_count === null || isNaN(ts.max_count) || ts.max_count < 0) {
+                showToast(`第 ${i + 1} 个时段的容量必须为非负整数`, 'error');
+                return;
+            }
+        }
+
+        try {
+            const res = await fetch(`${API_BASE}/slots/${itemId}/${date}/time-slots`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ time_slots: state.editingTimeSlots })
+            });
+
+            const data = await res.json();
+            if (!res.ok) {
+                throw new Error(data.error || '保存失败');
+            }
+
+            showToast('保存成功', 'success');
+            document.getElementById('slotModal').classList.remove('show');
+
+            if (state.currentTab === 'items') {
+                loadItems();
+            }
+        } catch (e) {
+            showToast(e.message, 'error');
+        }
+    } else if (useWindows) {
         const windowInputs = document.querySelectorAll('.window-slot-max');
         const windowData = [];
 
