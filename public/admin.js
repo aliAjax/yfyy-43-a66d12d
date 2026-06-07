@@ -1581,20 +1581,39 @@ function openSlotModal(itemId, itemName) {
 
     document.querySelectorAll('.slot-mode-tab').forEach(tab => {
         tab.addEventListener('click', () => {
-            const mode = tab.dataset.mode;
-            state.slotModalData.mode = mode;
+            const newMode = tab.dataset.mode;
+            const currentMode = state.slotModalData.mode;
+
+            if (newMode === currentMode) return;
+
+            if (currentMode === 'time' && state.editingTimeSlots.length > 0) {
+                const hasUsed = state.editingTimeSlots.some(ts => ts.current_count && ts.current_count > 0);
+                if (hasUsed) {
+                    if (!confirm('分时段已有预约记录，切换到每日总号源模式将保留分时段数据但不再使用。确定要切换吗？')) {
+                        return;
+                    }
+                } else {
+                    if (!confirm('切换到每日总号源模式后，分时段配置将被清除。确定要切换吗？')) {
+                        return;
+                    }
+                    state.editingTimeSlots = [];
+                }
+            }
+
+            state.slotModalData.mode = newMode;
 
             document.querySelectorAll('.slot-mode-tab').forEach(t => t.classList.remove('active'));
             tab.classList.add('active');
 
-            if (mode === 'total') {
+            if (newMode === 'total') {
                 document.getElementById('slotTotalGroup').style.display = 'block';
                 document.getElementById('slotTimeGroup').style.display = 'none';
                 document.getElementById('slotWindowsGroup').style.display = 'none';
-            } else if (mode === 'time') {
+            } else if (newMode === 'time') {
                 document.getElementById('slotTotalGroup').style.display = 'none';
                 document.getElementById('slotTimeGroup').style.display = 'block';
                 document.getElementById('slotWindowsGroup').style.display = 'none';
+                renderTimeSlotList();
             }
         });
     });
@@ -1776,7 +1795,7 @@ function removeTimeSlot(index) {
 }
 
 async function saveSlot() {
-    const { itemId, date, mode, useWindows } = state.slotModalData;
+    const { itemId, date, mode, useWindows, useTimeSlots } = state.slotModalData;
 
     if (mode === 'time') {
         if (state.editingTimeSlots.length === 0) {
@@ -1805,6 +1824,14 @@ async function saveSlot() {
             }
         }
 
+        const sortedSlots = [...state.editingTimeSlots].sort((a, b) => a.start_time.localeCompare(b.start_time));
+        for (let i = 0; i < sortedSlots.length - 1; i++) {
+            if (sortedSlots[i + 1].start_time < sortedSlots[i].end_time) {
+                showToast(`时段 ${sortedSlots[i].start_time}-${sortedSlots[i].end_time} 与 ${sortedSlots[i + 1].start_time}-${sortedSlots[i + 1].end_time} 存在重叠`, 'error');
+                return;
+            }
+        }
+
         try {
             const res = await fetch(`${API_BASE}/slots/${itemId}/${date}/time-slots`, {
                 method: 'PUT',
@@ -1827,6 +1854,21 @@ async function saveSlot() {
             showToast(e.message, 'error');
         }
     } else if (useWindows) {
+        if (useTimeSlots) {
+            if (!confirm('保存窗口号源将清除分时段配置，确定要继续吗？')) {
+                return;
+            }
+            try {
+                await fetch(`${API_BASE}/slots/${itemId}/${date}/time-slots`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ time_slots: [] })
+                });
+            } catch (e) {
+                console.error('清除分时段数据失败', e);
+            }
+        }
+
         const windowInputs = document.querySelectorAll('.window-slot-max');
         const windowData = [];
 
@@ -1864,6 +1906,21 @@ async function saveSlot() {
             showToast(e.message, 'error');
         }
     } else {
+        if (useTimeSlots) {
+            if (!confirm('保存每日号源将清除分时段配置，确定要继续吗？')) {
+                return;
+            }
+            try {
+                await fetch(`${API_BASE}/slots/${itemId}/${date}/time-slots`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ time_slots: [] })
+                });
+            } catch (e) {
+                console.error('清除分时段数据失败', e);
+            }
+        }
+
         const maxCount = document.getElementById('slotMaxCount').value;
 
         if (!maxCount || maxCount < 1) {

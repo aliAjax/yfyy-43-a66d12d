@@ -1019,13 +1019,7 @@ app.post('/api/appointments', (req, res) => {
       return res.status(400).json({ error: '所选时段无效，请重新选择' });
     }
 
-    const slotUsed = db.prepare(`
-      SELECT COUNT(*) as cnt FROM appointments 
-      WHERE item_id = ? AND appointment_date = ? 
-      AND time_slot = ? AND status != 'cancelled'
-    `).get(item_id, appointment_date, time_slot).cnt;
-
-    if (slotUsed >= matchedTimeSlot.max_count) {
+    if (matchedTimeSlot.current_count >= matchedTimeSlot.max_count) {
       return res.status(400).json({ error: '该时段号源已满，请选择其他时段' });
     }
   } else {
@@ -1039,73 +1033,75 @@ app.post('/api/appointments', (req, res) => {
     }
   }
 
-  const allItemWindows = db.prepare(`
-    SELECT COUNT(*) as cnt
-    FROM item_windows iw
-    WHERE iw.item_id = ?
-  `).get(item_id).cnt;
-
-  const itemWindows = db.prepare(`
-    SELECT iw.*, w.name as window_name, w.status as window_status
-    FROM item_windows iw
-    LEFT JOIN windows w ON iw.window_id = w.id
-    WHERE iw.item_id = ? AND w.status = 'active'
-    ORDER BY w.sort_order ASC, w.id ASC
-  `).all(item_id);
-
-  if (allItemWindows > 0 && itemWindows.length === 0) {
-    return res.status(400).json({ error: '该事项暂无可用办理窗口' });
-  }
-
   let assignedWindowId = null;
 
-  if (itemWindows.length > 0) {
-    let bestWindow = null;
-    let bestAvailable = -1;
+  if (!useTimeSlots) {
+    const allItemWindows = db.prepare(`
+      SELECT COUNT(*) as cnt
+      FROM item_windows iw
+      WHERE iw.item_id = ?
+    `).get(item_id).cnt;
 
-    for (const iw of itemWindows) {
-      let ws = db.prepare(
-        'SELECT * FROM window_slots WHERE window_id = ? AND item_id = ? AND date = ?'
-      ).get(iw.window_id, item_id, appointment_date);
+    const itemWindows = db.prepare(`
+      SELECT iw.*, w.name as window_name, w.status as window_status
+      FROM item_windows iw
+      LEFT JOIN windows w ON iw.window_id = w.id
+      WHERE iw.item_id = ? AND w.status = 'active'
+      ORDER BY w.sort_order ASC, w.id ASC
+    `).all(item_id);
 
-      if (!ws) {
-        const defaultCapacity = iw.default_capacity || 10;
-        db.prepare(
-          'INSERT INTO window_slots (window_id, item_id, date, max_count, current_count) VALUES (?, ?, ?, ?, 0)'
-        ).run(iw.window_id, item_id, appointment_date, defaultCapacity);
-        ws = db.prepare(
+    if (allItemWindows > 0 && itemWindows.length === 0) {
+      return res.status(400).json({ error: '该事项暂无可用办理窗口' });
+    }
+
+    if (itemWindows.length > 0) {
+      let bestWindow = null;
+      let bestAvailable = -1;
+
+      for (const iw of itemWindows) {
+        let ws = db.prepare(
           'SELECT * FROM window_slots WHERE window_id = ? AND item_id = ? AND date = ?'
         ).get(iw.window_id, item_id, appointment_date);
+
+        if (!ws) {
+          const defaultCapacity = iw.default_capacity || 10;
+          db.prepare(
+            'INSERT INTO window_slots (window_id, item_id, date, max_count, current_count) VALUES (?, ?, ?, ?, 0)'
+          ).run(iw.window_id, item_id, appointment_date, defaultCapacity);
+          ws = db.prepare(
+            'SELECT * FROM window_slots WHERE window_id = ? AND item_id = ? AND date = ?'
+          ).get(iw.window_id, item_id, appointment_date);
+        }
+
+        const windowUsed = db.prepare(
+          `SELECT COUNT(*) as cnt FROM appointments 
+           WHERE window_id = ? AND item_id = ? AND appointment_date = ? AND status != 'cancelled'`
+        ).get(iw.window_id, item_id, appointment_date).cnt;
+
+        const available = ws.max_count - windowUsed;
+
+        if (available > 0 && available > bestAvailable) {
+          bestAvailable = available;
+          bestWindow = iw;
+        }
       }
 
-      const windowUsed = db.prepare(
-        `SELECT COUNT(*) as cnt FROM appointments 
-         WHERE window_id = ? AND item_id = ? AND appointment_date = ? AND status != 'cancelled'`
-      ).get(iw.window_id, item_id, appointment_date).cnt;
-
-      const available = ws.max_count - windowUsed;
-
-      if (available > 0 && available > bestAvailable) {
-        bestAvailable = available;
-        bestWindow = iw;
+      if (!bestWindow) {
+        return res.status(400).json({ error: '所有窗口的号源均已满，请选择其他日期' });
       }
-    }
 
-    if (!bestWindow) {
-      return res.status(400).json({ error: '所有窗口的号源均已满，请选择其他日期' });
-    }
+      assignedWindowId = bestWindow.window_id;
+    } else {
+      let dailySlot = db.prepare('SELECT * FROM daily_slots WHERE item_id = ? AND date = ?').get(item_id, appointment_date);
+      if (!dailySlot) {
+        const defaultMax = item.default_max_count || 20;
+        db.prepare('INSERT INTO daily_slots (item_id, date, max_count, current_count) VALUES (?, ?, ?, 0)').run(item_id, appointment_date, defaultMax);
+        dailySlot = db.prepare('SELECT * FROM daily_slots WHERE item_id = ? AND date = ?').get(item_id, appointment_date);
+      }
 
-    assignedWindowId = bestWindow.window_id;
-  } else {
-    let dailySlot = db.prepare('SELECT * FROM daily_slots WHERE item_id = ? AND date = ?').get(item_id, appointment_date);
-    if (!dailySlot) {
-      const defaultMax = item.default_max_count || 20;
-      db.prepare('INSERT INTO daily_slots (item_id, date, max_count, current_count) VALUES (?, ?, ?, 0)').run(item_id, appointment_date, defaultMax);
-      dailySlot = db.prepare('SELECT * FROM daily_slots WHERE item_id = ? AND date = ?').get(item_id, appointment_date);
-    }
-
-    if (dailySlot.current_count >= dailySlot.max_count) {
-      return res.status(400).json({ error: '该日期号源已满，请选择其他日期' });
+      if (dailySlot.current_count >= dailySlot.max_count) {
+        return res.status(400).json({ error: '该日期号源已满，请选择其他日期' });
+      }
     }
   }
 
@@ -1648,6 +1644,17 @@ app.put('/api/slots/:itemId/:date/time-slots', (req, res) => {
     }
     if (ts.max_count === undefined || ts.max_count === null || isNaN(parseInt(ts.max_count)) || parseInt(ts.max_count) < 0) {
       return res.status(400).json({ error: `第 ${i + 1} 条时段的容量必须为非负整数` });
+    }
+  }
+
+  const sortedSlots = [...time_slots].sort((a, b) => a.start_time.localeCompare(b.start_time));
+  for (let i = 0; i < sortedSlots.length - 1; i++) {
+    const current = sortedSlots[i];
+    const next = sortedSlots[i + 1];
+    if (next.start_time < current.end_time) {
+      return res.status(400).json({ 
+        error: `时段 ${current.start_time}-${current.end_time} 与 ${next.start_time}-${next.end_time} 存在重叠` 
+      });
     }
   }
 
