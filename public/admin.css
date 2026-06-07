@@ -179,6 +179,26 @@ body {
     background: #f0e6ff;
 }
 
+.stat-icon-red {
+    background: #ffe6e6;
+}
+
+.stat-icon-cyan {
+    background: #e6fffb;
+}
+
+.stat-icon-pink {
+    background: #ffe6f0;
+}
+
+.stat-icon-indigo {
+    background: #e6e9ff;
+}
+
+.stat-icon-orange {
+    background: #fff0e6;
+}
+
 .stat-value {
     font-size: 28px;
     font-weight: 700;
@@ -1508,4 +1528,74 @@ body {
 
 .btn-warning:hover {
     background: #d47800;
+}
+
+.rank-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    font-size: 13px;
+    font-weight: 600;
+    background: #f0f2f5;
+    color: #666;
+}
+
+.rank-1 {
+    background: linear-gradient(135deg, #ffd700, #ffb800);
+    color: white;
+}
+
+.rank-2 {
+    background: linear-gradient(135deg, #c0c0c0, #a0a0a0);
+    color: white;
+}
+
+.rank-3 {
+    background: linear-gradient(135deg, #cd7f32, #b87333);
+    color: white;
+}
+
+.rate-green {
+    color: #52c41a;
+    font-weight: 500;
+}
+
+.rate-orange {
+    color: #fa8c16;
+    font-weight: 500;
+}
+
+.rate-red {
+    color: #f5222d;
+    font-weight: 500;
+}
+
+.rating-stars {
+    color: #fadb14;
+    font-size: 14px;
+}
+
+#analyticsStatsGrid {
+    grid-template-columns: repeat(5, 1fr);
+}
+
+@media (max-width: 1400px) {
+    #analyticsStatsGrid {
+        grid-template-columns: repeat(4, 1fr);
+    }
+}
+
+@media (max-width: 1100px) {
+    #analyticsStatsGrid {
+        grid-template-columns: repeat(3, 1fr);
+    }
+}
+
+@media (max-width: 768px) {
+    #analyticsStatsGrid {
+        grid-template-columns: repeat(2, 1fr);
+    }
 }

@@ -18,6 +18,10 @@
                     <span class="nav-icon">📊</span>
                     <span>数据概览</span>
                 </div>
+                <div class="nav-item" data-tab="analytics">
+                    <span class="nav-icon">📈</span>
+                    <span>运营分析</span>
+                </div>
                 <div class="nav-item" data-tab="appointments">
                     <span class="nav-icon">📅</span>
                     <span>预约管理</span>
@@ -141,6 +145,133 @@
                                 </thead>
                                 <tbody id="todayAppointments">
                                     <tr><td colspan="7" class="loading">加载中...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="tab-content" id="tab-analytics">
+                    <div class="page-header">
+                        <h3>运营分析</h3>
+                    </div>
+
+                    <div class="filter-bar">
+                        <div class="filter-item">
+                            <label>开始日期</label>
+                            <input type="date" id="analyticsStartDate">
+                        </div>
+                        <div class="filter-item">
+                            <label>结束日期</label>
+                            <input type="date" id="analyticsEndDate">
+                        </div>
+                        <div class="filter-item">
+                            <label>事项</label>
+                            <select id="analyticsItem">
+                                <option value="">全部事项</option>
+                            </select>
+                        </div>
+                        <div class="filter-item filter-actions">
+                            <button class="btn btn-primary" id="btnSearchAnalytics">查询</button>
+                            <button class="btn btn-secondary" id="btnResetAnalytics">重置</button>
+                        </div>
+                    </div>
+
+                    <div class="stats-grid" id="analyticsStatsGrid">
+                        <div class="stat-card">
+                            <div class="stat-icon stat-icon-blue">📋</div>
+                            <div class="stat-info">
+                                <div class="stat-value" id="analyticsTotal">0</div>
+                                <div class="stat-label">预约总量</div>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon stat-icon-green">✅</div>
+                            <div class="stat-info">
+                                <div class="stat-value" id="analyticsCompleted">0</div>
+                                <div class="stat-label">已完成</div>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon stat-icon-orange">📊</div>
+                            <div class="stat-info">
+                                <div class="stat-value" id="analyticsCompletionRate">0%</div>
+                                <div class="stat-label">完成率</div>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon stat-icon-red">❌</div>
+                            <div class="stat-info">
+                                <div class="stat-value" id="analyticsCancelled">0</div>
+                                <div class="stat-label">已取消</div>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon stat-icon-orange">🚫</div>
+                            <div class="stat-info">
+                                <div class="stat-value" id="analyticsCancelRate">0%</div>
+                                <div class="stat-label">取消率</div>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon stat-icon-purple">🚶</div>
+                            <div class="stat-info">
+                                <div class="stat-value" id="analyticsNoShow">0</div>
+                                <div class="stat-label">爽约次数</div>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon stat-icon-yellow">⏰</div>
+                            <div class="stat-info">
+                                <div class="stat-value" id="analyticsNoShowRate">0%</div>
+                                <div class="stat-label">爽约率</div>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon stat-icon-cyan">🔄</div>
+                            <div class="stat-info">
+                                <div class="stat-value" id="analyticsReschedule">0</div>
+                                <div class="stat-label">改期次数</div>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon stat-icon-pink">⭐</div>
+                            <div class="stat-info">
+                                <div class="stat-value" id="analyticsReview">0</div>
+                                <div class="stat-label">评价数</div>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon stat-icon-indigo">🌟</div>
+                            <div class="stat-info">
+                                <div class="stat-value" id="analyticsAvgRating">0.0</div>
+                                <div class="stat-label">平均评分</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="dashboard-section">
+                        <h3>各事项排行</h3>
+                        <div class="table-container">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>排名</th>
+                                        <th>事项名称</th>
+                                        <th>预约量</th>
+                                        <th>完成数</th>
+                                        <th>完成率</th>
+                                        <th>取消数</th>
+                                        <th>取消率</th>
+                                        <th>爽约数</th>
+                                        <th>爽约率</th>
+                                        <th>改期次数</th>
+                                        <th>评价数</th>
+                                        <th>平均评分</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="analyticsItemRank">
+                                    <tr><td colspan="12" class="loading">加载中...</td></tr>
                                 </tbody>
                             </table>
                         </div>

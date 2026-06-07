@@ -167,6 +167,7 @@ function switchTab(tab) {
 
     const titles = {
         dashboard: '数据概览',
+        analytics: '运营分析',
         appointments: '预约管理',
         items: '事项管理',
         holidays: '节假日管理',
@@ -182,6 +183,8 @@ function switchTab(tab) {
 
     if (tab === 'dashboard') {
         loadDashboard();
+    } else if (tab === 'analytics') {
+        loadAnalytics();
     } else if (tab === 'appointments') {
         loadAppointments();
     } else if (tab === 'items') {
@@ -273,6 +276,162 @@ function renderTodayAppointments(appointments) {
             </td>
         </tr>
     `).join('');
+}
+
+function getDefaultAnalyticsRange() {
+    const end = new Date();
+    const start = new Date();
+    start.setDate(start.getDate() - 6);
+    return {
+        start: formatDate(start),
+        end: formatDate(end)
+    };
+}
+
+async function loadAnalyticsItemSelect() {
+    try {
+        const res = await fetch(`${API_BASE}/items`);
+        const items = await res.json();
+        const select = document.getElementById('analyticsItem');
+        if (select) {
+            select.innerHTML = '<option value="">全部事项</option>' +
+                items.map(item => `<option value="${item.id}">${item.name}</option>`).join('');
+        }
+    } catch (e) {
+        console.error('加载事项失败', e);
+    }
+}
+
+async function loadAnalytics() {
+    await loadAnalyticsItemSelect();
+    initAnalyticsDates();
+    bindAnalyticsEvents();
+    searchAnalytics();
+}
+
+function initAnalyticsDates() {
+    const range = getDefaultAnalyticsRange();
+    const startInput = document.getElementById('analyticsStartDate');
+    const endInput = document.getElementById('analyticsEndDate');
+    if (startInput && !startInput.value) {
+        startInput.value = range.start;
+    }
+    if (endInput && !endInput.value) {
+        endInput.value = range.end;
+    }
+}
+
+let analyticsEventsBound = false;
+function bindAnalyticsEvents() {
+    if (analyticsEventsBound) return;
+    analyticsEventsBound = true;
+
+    const btnSearch = document.getElementById('btnSearchAnalytics');
+    const btnReset = document.getElementById('btnResetAnalytics');
+
+    if (btnSearch) {
+        btnSearch.addEventListener('click', searchAnalytics);
+    }
+    if (btnReset) {
+        btnReset.addEventListener('click', resetAnalytics);
+    }
+}
+
+async function searchAnalytics() {
+    const startDate = document.getElementById('analyticsStartDate').value;
+    const endDate = document.getElementById('analyticsEndDate').value;
+    const itemId = document.getElementById('analyticsItem').value;
+
+    const params = [];
+    if (startDate) params.push(`start_date=${startDate}`);
+    if (endDate) params.push(`end_date=${endDate}`);
+    if (itemId) params.push(`item_id=${itemId}`);
+
+    try {
+        const overviewRes = await fetch(`${API_BASE}/analytics/overview?${params.join('&')}`);
+        const overview = await overviewRes.json();
+        renderAnalyticsOverview(overview);
+    } catch (e) {
+        showToast('加载统计数据失败', 'error');
+    }
+
+    try {
+        const rankParams = [];
+        if (startDate) rankParams.push(`start_date=${startDate}`);
+        if (endDate) rankParams.push(`end_date=${endDate}`);
+        const rankRes = await fetch(`${API_BASE}/analytics/items?${rankParams.join('&')}`);
+        const rankData = await rankRes.json();
+        renderAnalyticsItemRank(rankData.items);
+    } catch (e) {
+        showToast('加载事项排行失败', 'error');
+    }
+}
+
+function resetAnalytics() {
+    const range = getDefaultAnalyticsRange();
+    document.getElementById('analyticsStartDate').value = range.start;
+    document.getElementById('analyticsEndDate').value = range.end;
+    document.getElementById('analyticsItem').value = '';
+    searchAnalytics();
+}
+
+function renderAnalyticsOverview(data) {
+    document.getElementById('analyticsTotal').textContent = data.total_count || 0;
+    document.getElementById('analyticsCompleted').textContent = data.completed_count || 0;
+    document.getElementById('analyticsCompletionRate').textContent = (data.completion_rate || 0) + '%';
+    document.getElementById('analyticsCancelled').textContent = data.cancelled_count || 0;
+    document.getElementById('analyticsCancelRate').textContent = (data.cancellation_rate || 0) + '%';
+    document.getElementById('analyticsNoShow').textContent = data.no_show_count || 0;
+    document.getElementById('analyticsNoShowRate').textContent = (data.no_show_rate || 0) + '%';
+    document.getElementById('analyticsReschedule').textContent = data.reschedule_count || 0;
+    document.getElementById('analyticsReview').textContent = data.review_count || 0;
+    document.getElementById('analyticsAvgRating').textContent = data.avg_rating || '0.0';
+}
+
+function renderAnalyticsItemRank(items) {
+    const tbody = document.getElementById('analyticsItemRank');
+
+    if (!items || items.length === 0) {
+        tbody.innerHTML = `
+            <tr>
+                <td colspan="12" class="empty-state">
+                    <div class="empty-icon">📊</div>
+                    <p>暂无数据</p>
+                </td>
+            </tr>
+        `;
+        return;
+    }
+
+    tbody.innerHTML = items.map((item, index) => `
+        <tr>
+            <td><span class="rank-badge rank-${index + 1}">${index + 1}</span></td>
+            <td>${escapeHtml(item.name)}</td>
+            <td>${item.total_count || 0}</td>
+            <td>${item.completed_count || 0}</td>
+            <td><span class="rate-green">${item.completion_rate || 0}%</span></td>
+            <td>${item.cancelled_count || 0}</td>
+            <td><span class="rate-orange">${item.cancellation_rate || 0}%</span></td>
+            <td>${item.no_show_count || 0}</td>
+            <td><span class="rate-red">${item.no_show_rate || 0}%</span></td>
+            <td>${item.reschedule_count || 0}</td>
+            <td>${item.review_count || 0}</td>
+            <td><span class="rating-stars">${renderStars(item.avg_rating || 0)} ${item.avg_rating || 0}</span></td>
+        </tr>
+    `).join('');
+}
+
+function renderStars(rating) {
+    const full = Math.floor(rating);
+    let stars = '';
+    for (let i = 0; i < 5; i++) {
+        if (i < full) {
+            stars += '★';
+        } else {
+            stars += '☆';
+        }
+    }
+    return stars;
 }
 
 async function loadAppointments() {

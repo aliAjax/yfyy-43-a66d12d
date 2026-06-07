@@ -2826,6 +2826,170 @@ app.get('/api/stats', (req, res) => {
   });
 });
 
+function getDefaultDateRange() {
+  const end = new Date();
+  const start = new Date();
+  start.setDate(start.getDate() - 6);
+  const fmt = (d) => {
+    const y = d.getFullYear();
+    const m = (d.getMonth() + 1).toString().padStart(2, '0');
+    const day = d.getDate().toString().padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  };
+  return { start_date: fmt(start), end_date: fmt(end) };
+}
+
+app.get('/api/analytics/overview', (req, res) => {
+  let { start_date, end_date, item_id } = req.query;
+
+  if (!start_date || !end_date) {
+    const defaultRange = getDefaultDateRange();
+    start_date = start_date || defaultRange.start_date;
+    end_date = end_date || defaultRange.end_date;
+  }
+
+  const aptWhere = ['appointment_date >= ?', 'appointment_date <= ?'];
+  const aptParams = [start_date, end_date];
+  if (item_id) {
+    aptWhere.push('item_id = ?');
+    aptParams.push(item_id);
+  }
+  const aptWhereSql = aptWhere.join(' AND ');
+
+  const totalRow = db.prepare(`SELECT COUNT(*) as count FROM appointments WHERE ${aptWhereSql}`).get(...aptParams);
+  const totalCount = totalRow.count;
+
+  const statusCounts = db.prepare(`
+    SELECT status, COUNT(*) as count 
+    FROM appointments 
+    WHERE ${aptWhereSql}
+    GROUP BY status
+  `).all(...aptParams);
+
+  const statusMap = {};
+  statusCounts.forEach(s => { statusMap[s.status] = s.count; });
+
+  const completedCount = statusMap.completed || 0;
+  const cancelledCount = statusMap.cancelled || 0;
+  const noShowCount = statusMap.no_show || 0;
+  const pendingCount = statusMap.pending || 0;
+  const arrivedCount = statusMap.arrived || 0;
+  const callingCount = statusMap.calling || 0;
+
+  const completionRate = totalCount > 0 ? parseFloat(((completedCount / totalCount) * 100).toFixed(1)) : 0;
+  const cancellationRate = totalCount > 0 ? parseFloat(((cancelledCount / totalCount) * 100).toFixed(1)) : 0;
+  const noShowRate = totalCount > 0 ? parseFloat(((noShowCount / totalCount) * 100).toFixed(1)) : 0;
+
+  const reviewWhere = ['DATE(created_at) >= ?', 'DATE(created_at) <= ?'];
+  const reviewParams = [start_date, end_date];
+  if (item_id) {
+    reviewWhere.push('item_id = ?');
+    reviewParams.push(item_id);
+  }
+  const reviewWhereSql = reviewWhere.join(' AND ');
+
+  const reviewRow = db.prepare(`SELECT COUNT(*) as count FROM appointment_reviews WHERE ${reviewWhereSql}`).get(...reviewParams);
+  const reviewCount = reviewRow.count;
+
+  const avgRatingRow = db.prepare(`SELECT AVG(rating) as avg_rating FROM appointment_reviews WHERE ${reviewWhereSql}`).get(...reviewParams);
+  const avgRating = avgRatingRow.avg_rating ? parseFloat(avgRatingRow.avg_rating.toFixed(1)) : 0;
+
+  const rescheduleWhere = ['DATE(created_at) >= ?', 'DATE(created_at) <= ?'];
+  const rescheduleParams = [start_date, end_date];
+  if (item_id) {
+    rescheduleWhere.push('item_id = ?');
+    rescheduleParams.push(item_id);
+  }
+  const rescheduleWhereSql = rescheduleWhere.join(' AND ');
+  const rescheduleRow = db.prepare(`SELECT COUNT(*) as count FROM appointment_reschedules WHERE ${rescheduleWhereSql}`).get(...rescheduleParams);
+  const rescheduleCount = rescheduleRow.count;
+
+  res.json({
+    start_date,
+    end_date,
+    total_count: totalCount,
+    completed_count: completedCount,
+    cancelled_count: cancelledCount,
+    no_show_count: noShowCount,
+    pending_count: pendingCount,
+    arrived_count: arrivedCount,
+    calling_count: callingCount,
+    completion_rate: completionRate,
+    cancellation_rate: cancellationRate,
+    no_show_rate: noShowRate,
+    review_count: reviewCount,
+    avg_rating: avgRating,
+    reschedule_count: rescheduleCount
+  });
+});
+
+app.get('/api/analytics/items', (req, res) => {
+  let { start_date, end_date } = req.query;
+
+  if (!start_date || !end_date) {
+    const defaultRange = getDefaultDateRange();
+    start_date = start_date || defaultRange.start_date;
+    end_date = end_date || defaultRange.end_date;
+  }
+
+  const items = db.prepare(`
+    SELECT 
+      i.id,
+      i.name,
+      COUNT(a.id) as total_count,
+      SUM(CASE WHEN a.status = 'completed' THEN 1 ELSE 0 END) as completed_count,
+      SUM(CASE WHEN a.status = 'cancelled' THEN 1 ELSE 0 END) as cancelled_count,
+      SUM(CASE WHEN a.status = 'no_show' THEN 1 ELSE 0 END) as no_show_count
+    FROM items i
+    LEFT JOIN appointments a ON i.id = a.item_id 
+      AND a.appointment_date >= ? 
+      AND a.appointment_date <= ?
+    GROUP BY i.id, i.name
+    ORDER BY total_count DESC, i.id ASC
+  `).all(start_date, end_date);
+
+  const result = items.map(item => {
+    const total = item.total_count || 0;
+    const completed = item.completed_count || 0;
+    const cancelled = item.cancelled_count || 0;
+    const noShow = item.no_show_count || 0;
+
+    const reviewStats = db.prepare(`
+      SELECT COUNT(*) as review_count, AVG(rating) as avg_rating
+      FROM appointment_reviews
+      WHERE item_id = ? AND DATE(created_at) >= ? AND DATE(created_at) <= ?
+    `).get(item.id, start_date, end_date);
+
+    const rescheduleCount = db.prepare(`
+      SELECT COUNT(*) as count
+      FROM appointment_reschedules
+      WHERE item_id = ? AND DATE(created_at) >= ? AND DATE(created_at) <= ?
+    `).get(item.id, start_date, end_date).count;
+
+    return {
+      id: item.id,
+      name: item.name,
+      total_count: total,
+      completed_count: completed,
+      cancelled_count: cancelled,
+      no_show_count: noShow,
+      completion_rate: total > 0 ? parseFloat(((completed / total) * 100).toFixed(1)) : 0,
+      cancellation_rate: total > 0 ? parseFloat(((cancelled / total) * 100).toFixed(1)) : 0,
+      no_show_rate: total > 0 ? parseFloat(((noShow / total) * 100).toFixed(1)) : 0,
+      review_count: reviewStats.review_count || 0,
+      avg_rating: reviewStats.avg_rating ? parseFloat(reviewStats.avg_rating.toFixed(1)) : 0,
+      reschedule_count: rescheduleCount || 0
+    };
+  });
+
+  res.json({
+    start_date,
+    end_date,
+    items: result
+  });
+});
+
+
 app.post('/api/reviews', (req, res) => {
   const { appointment_id, phone, rating, feedback } = req.body;
 
