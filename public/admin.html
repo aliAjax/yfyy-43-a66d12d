@@ -975,6 +975,62 @@
         </div>
     </div>
 
+    <div class="modal" id="weeklyTemplateModal">
+        <div class="modal-content" style="max-width: 700px;">
+            <h3 id="weeklyTemplateTitle">周期模板配置</h3>
+            <div class="form-group">
+                <label>选择星期</label>
+                <div class="weekday-tabs">
+                    <button type="button" class="weekday-tab active" data-weekday="1">周一</button>
+                    <button type="button" class="weekday-tab" data-weekday="2">周二</button>
+                    <button type="button" class="weekday-tab" data-weekday="3">周三</button>
+                    <button type="button" class="weekday-tab" data-weekday="4">周四</button>
+                    <button type="button" class="weekday-tab" data-weekday="5">周五</button>
+                    <button type="button" class="weekday-tab" data-weekday="6">周六</button>
+                    <button type="button" class="weekday-tab" data-weekday="0">周日</button>
+                </div>
+            </div>
+            <div class="form-group">
+                <label>号源模式</label>
+                <div class="slot-mode-tabs">
+                    <button type="button" class="slot-mode-tab active" data-mode="total">每日总号源</button>
+                    <button type="button" class="slot-mode-tab" data-mode="time">分时段容量</button>
+                    <button type="button" class="slot-mode-tab" data-mode="window">窗口号源</button>
+                </div>
+            </div>
+            <div class="form-group" id="weeklyTemplateTotalGroup">
+                <label>号源数量 <span class="required">*</span></label>
+                <input type="number" id="weeklyTemplateMaxCount" min="1" max="500">
+                <small class="form-tip">设置该星期的默认号源数量</small>
+            </div>
+            <div class="form-group" id="weeklyTemplateTimeGroup" style="display:none;">
+                <div class="slot-time-header">
+                    <label>分时段容量设置</label>
+                    <button type="button" class="btn btn-sm btn-primary" id="btnAddWeeklyTimeSlot">+ 添加时段</button>
+                </div>
+                <div id="weeklyTemplateTimeList" class="slot-time-list"></div>
+                <small class="form-tip">设置每个时段的开始时间、结束时间和容量</small>
+            </div>
+            <div class="form-group" id="weeklyTemplateWindowGroup" style="display:none;">
+                <label>各窗口号源设置</label>
+                <div id="weeklyTemplateWindowList" class="window-slot-list"></div>
+                <small class="form-tip">分别设置每个窗口的号源数量</small>
+            </div>
+            <div class="form-group" style="border-top: 1px solid #eee; padding-top: 15px;">
+                <label>批量操作</label>
+                <div class="batch-actions">
+                    <button type="button" class="btn btn-sm btn-secondary" id="btnCopyToWeekdays">复制到工作日(一~五)</button>
+                    <button type="button" class="btn btn-sm btn-secondary" id="btnCopyToAllWeek">复制到整周</button>
+                    <button type="button" class="btn btn-sm btn-danger" id="btnClearWeekdayTemplate">清除当天模板</button>
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" id="btnCancelWeeklyTemplate">取消</button>
+                <button class="btn btn-primary" id="btnSaveWeeklyTemplate">保存</button>
+            </div>
+        </div>
+    </div>
+
     <div class="modal" id="restrictionModal">
         <div class="modal-content">
             <h3 id="restrictionModalTitle">新增手机号限制</h3>

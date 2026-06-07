@@ -201,6 +201,46 @@ db.exec(`
   );
 
   CREATE INDEX IF NOT EXISTS idx_snapshots_appointment ON appointment_material_snapshots(appointment_id);
+
+  CREATE TABLE IF NOT EXISTS weekly_daily_templates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_id INTEGER NOT NULL,
+    weekday INTEGER NOT NULL,
+    max_count INTEGER NOT NULL DEFAULT 20,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE,
+    UNIQUE(item_id, weekday)
+  );
+
+  CREATE TABLE IF NOT EXISTS weekly_time_slot_templates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_id INTEGER NOT NULL,
+    weekday INTEGER NOT NULL,
+    start_time TEXT NOT NULL,
+    end_time TEXT NOT NULL,
+    max_count INTEGER NOT NULL DEFAULT 0,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_weekly_ts_item_weekday ON weekly_time_slot_templates(item_id, weekday);
+
+  CREATE TABLE IF NOT EXISTS weekly_window_templates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_id INTEGER NOT NULL,
+    window_id INTEGER NOT NULL,
+    weekday INTEGER NOT NULL,
+    max_count INTEGER NOT NULL DEFAULT 10,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE,
+    FOREIGN KEY (window_id) REFERENCES windows(id) ON DELETE CASCADE,
+    UNIQUE(item_id, window_id, weekday)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_weekly_windows_item_weekday ON weekly_window_templates(item_id, weekday);
 `);
 
 const columns = db.prepare("PRAGMA table_info(items)").all();
@@ -281,6 +321,24 @@ if (!hasIsRequired) {
 const hasRequireConfirmation = matColumns.some(c => c.name === 'require_confirmation');
 if (!hasRequireConfirmation) {
   db.exec('ALTER TABLE item_materials ADD COLUMN require_confirmation INTEGER NOT NULL DEFAULT 0');
+}
+
+const dailySlotColumns = db.prepare("PRAGMA table_info(daily_slots)").all();
+const hasDailySlotSource = dailySlotColumns.some(c => c.name === 'source_type');
+if (!hasDailySlotSource) {
+  db.exec("ALTER TABLE daily_slots ADD COLUMN source_type TEXT NOT NULL DEFAULT 'manual'");
+}
+
+const timeSlotColumns = db.prepare("PRAGMA table_info(time_slot_capacities)").all();
+const hasTimeSlotSource = timeSlotColumns.some(c => c.name === 'source_type');
+if (!hasTimeSlotSource) {
+  db.exec("ALTER TABLE time_slot_capacities ADD COLUMN source_type TEXT NOT NULL DEFAULT 'manual'");
+}
+
+const windowSlotColumns = db.prepare("PRAGMA table_info(window_slots)").all();
+const hasWindowSlotSource = windowSlotColumns.some(c => c.name === 'source_type');
+if (!hasWindowSlotSource) {
+  db.exec("ALTER TABLE window_slots ADD COLUMN source_type TEXT NOT NULL DEFAULT 'manual'");
 }
 
 function getSystemSetting(key, defaultValue = null) {
@@ -1137,11 +1195,52 @@ app.get('/api/slots/:itemId/:date', (req, res) => {
     return res.json({ available: false, reason: '该日期为节假日或周末，不可预约' });
   }
 
-  const timeSlotCaps = db.prepare(`
+  const weekday = getWeekdayFromDate(date);
+
+  let manualTimeSlots = db.prepare(`
     SELECT * FROM time_slot_capacities 
-    WHERE item_id = ? AND date = ? 
+    WHERE item_id = ? AND date = ? AND source_type = 'manual'
     ORDER BY sort_order ASC, start_time ASC
   `).all(itemId, date);
+
+  let timeSlotCaps = manualTimeSlots;
+  let timeSlotSource = manualTimeSlots.length > 0 ? 'manual' : 'none';
+
+  if (timeSlotCaps.length === 0) {
+    const templateSlots = getWeeklyTimeSlotTemplates(itemId, weekday);
+    if (templateSlots.length > 0) {
+      let templateRecords = db.prepare(`
+        SELECT * FROM time_slot_capacities 
+        WHERE item_id = ? AND date = ? AND source_type = 'template'
+        ORDER BY sort_order ASC, start_time ASC
+      `).all(itemId, date);
+
+      if (templateRecords.length > 0) {
+        timeSlotCaps = templateRecords;
+        timeSlotSource = 'template';
+      } else {
+        const insertStmt = db.prepare(`
+          INSERT INTO time_slot_capacities 
+          (item_id, date, start_time, end_time, max_count, current_count, sort_order, source_type)
+          VALUES (?, ?, ?, ?, ?, 0, ?, 'template')
+        `);
+
+        const tx = db.transaction(() => {
+          templateSlots.forEach((ts, index) => {
+            insertStmt.run(itemId, date, ts.start_time, ts.end_time, ts.max_count, ts.sort_order !== undefined ? ts.sort_order : index);
+          });
+        });
+        tx();
+
+        timeSlotCaps = db.prepare(`
+          SELECT * FROM time_slot_capacities 
+          WHERE item_id = ? AND date = ? AND source_type = 'template'
+          ORDER BY sort_order ASC, start_time ASC
+        `).all(itemId, date);
+        timeSlotSource = 'template';
+      }
+    }
+  }
 
   const allItemWindows = db.prepare(`
     SELECT COUNT(*) as cnt
@@ -1200,24 +1299,18 @@ app.get('/api/slots/:itemId/:date', (req, res) => {
     let windowSlots = [];
     let useWindows = false;
     let windowTotalAvailable = 0;
+    let windowSource = 'manual';
 
     if (allItemWindows > 0) {
       useWindows = true;
+      let hasAnyManual = false;
+      let hasAnyTemplate = false;
 
       itemWindows.forEach(iw => {
-        let ws = db.prepare(
-          'SELECT * FROM window_slots WHERE window_id = ? AND item_id = ? AND date = ?'
-        ).get(iw.window_id, itemId, date);
-
-        if (!ws) {
-          const defaultCapacity = iw.default_capacity || 10;
-          db.prepare(
-            'INSERT INTO window_slots (window_id, item_id, date, max_count, current_count) VALUES (?, ?, ?, ?, 0)'
-          ).run(iw.window_id, itemId, date, defaultCapacity);
-          ws = db.prepare(
-            'SELECT * FROM window_slots WHERE window_id = ? AND item_id = ? AND date = ?'
-          ).get(iw.window_id, itemId, date);
-        }
+        const effective = getEffectiveWindowSlot(itemId, iw.window_id, date, iw.default_capacity || 10);
+        const ws = effective.slot;
+        if (effective.source === 'manual') hasAnyManual = true;
+        if (effective.source === 'template') hasAnyTemplate = true;
 
         const windowApts = db.prepare(
           `SELECT COUNT(*) as cnt FROM appointments 
@@ -1234,9 +1327,18 @@ app.get('/api/slots/:itemId/:date', (req, res) => {
           window_name: iw.window_name,
           max_count: ws.max_count,
           current_count: windowUsedCount,
-          available_count: windowAvailable
+          available_count: windowAvailable,
+          source_type: effective.source
         });
       });
+
+      if (hasAnyManual) {
+        windowSource = 'manual';
+      } else if (hasAnyTemplate) {
+        windowSource = 'template';
+      } else {
+        windowSource = 'template';
+      }
     }
 
     const effectiveAvailable = useWindows ? Math.min(totalAvailable, windowTotalAvailable) : totalAvailable;
@@ -1255,18 +1357,58 @@ app.get('/api/slots/:itemId/:date', (req, res) => {
       time_slots: timeSlots,
       use_time_slots: true,
       use_windows: useWindows,
-      windows: windowSlots
+      windows: windowSlots,
+      slot_source: timeSlotSource,
+      window_source: windowSource
     });
     return;
   }
 
   if (itemWindows.length === 0) {
-    let slot = db.prepare('SELECT * FROM daily_slots WHERE item_id = ? AND date = ?').get(itemId, date);
+    let slot = db.prepare(
+      "SELECT * FROM daily_slots WHERE item_id = ? AND date = ? AND source_type = 'manual'"
+    ).get(itemId, date);
+
+    let dailySource = 'manual';
+
+    if (!slot) {
+      const weekday = getWeekdayFromDate(date);
+      const dailyTemplate = getWeeklyDailyTemplate(itemId, weekday);
+
+      if (dailyTemplate) {
+        let templateSlot = db.prepare(
+          "SELECT * FROM daily_slots WHERE item_id = ? AND date = ? AND source_type = 'template'"
+        ).get(itemId, date);
+
+        if (templateSlot) {
+          slot = templateSlot;
+          dailySource = 'template';
+        } else {
+          db.prepare(
+            "INSERT INTO daily_slots (item_id, date, max_count, current_count, source_type) VALUES (?, ?, ?, 0, 'template')"
+          ).run(itemId, date, dailyTemplate.max_count);
+          slot = db.prepare(
+            "SELECT * FROM daily_slots WHERE item_id = ? AND date = ? AND source_type = 'template'"
+          ).get(itemId, date);
+          dailySource = 'template';
+        }
+      }
+    }
+
+    if (!slot) {
+      slot = db.prepare('SELECT * FROM daily_slots WHERE item_id = ? AND date = ?').get(itemId, date);
+      if (slot) {
+        dailySource = slot.source_type || 'template';
+      }
+    }
 
     if (!slot) {
       const defaultMax = item.default_max_count || 20;
-      db.prepare('INSERT INTO daily_slots (item_id, date, max_count, current_count) VALUES (?, ?, ?, 0)').run(itemId, date, defaultMax);
+      db.prepare(
+        "INSERT INTO daily_slots (item_id, date, max_count, current_count, source_type) VALUES (?, ?, ?, 0, 'template')"
+      ).run(itemId, date, defaultMax);
       slot = db.prepare('SELECT * FROM daily_slots WHERE item_id = ? AND date = ?').get(itemId, date);
+      dailySource = 'template';
     }
 
     const timeSlots = generateTimeSlots(slot.max_count);
@@ -1290,7 +1432,8 @@ app.get('/api/slots/:itemId/:date', (req, res) => {
       available_count: availableCount,
       time_slots: availableSlots,
       use_windows: false,
-      windows: []
+      windows: [],
+      slot_source: dailySource
     });
     return;
   }
@@ -1298,21 +1441,15 @@ app.get('/api/slots/:itemId/:date', (req, res) => {
   let totalMax = 0;
   let totalCurrent = 0;
   const windowSlots = [];
+  let windowSource = 'manual';
+  let hasAnyManual = false;
+  let hasAnyTemplate = false;
 
   itemWindows.forEach(iw => {
-    let ws = db.prepare(
-      'SELECT * FROM window_slots WHERE window_id = ? AND item_id = ? AND date = ?'
-    ).get(iw.window_id, itemId, date);
-
-    if (!ws) {
-      const defaultCapacity = iw.default_capacity || 10;
-      db.prepare(
-        'INSERT INTO window_slots (window_id, item_id, date, max_count, current_count) VALUES (?, ?, ?, ?, 0)'
-      ).run(iw.window_id, itemId, date, defaultCapacity);
-      ws = db.prepare(
-        'SELECT * FROM window_slots WHERE window_id = ? AND item_id = ? AND date = ?'
-      ).get(iw.window_id, itemId, date);
-    }
+    const effective = getEffectiveWindowSlot(itemId, iw.window_id, date, iw.default_capacity || 10);
+    const ws = effective.slot;
+    if (effective.source === 'manual') hasAnyManual = true;
+    if (effective.source === 'template') hasAnyTemplate = true;
 
     const windowApts = db.prepare(
       `SELECT time_slot FROM appointments 
@@ -1330,9 +1467,18 @@ app.get('/api/slots/:itemId/:date', (req, res) => {
       window_name: iw.window_name,
       max_count: ws.max_count,
       current_count: windowUsedCount,
-      available_count: windowAvailable
+      available_count: windowAvailable,
+      source_type: effective.source
     });
   });
+
+  if (hasAnyManual) {
+    windowSource = 'manual';
+  } else if (hasAnyTemplate) {
+    windowSource = 'template';
+  } else {
+    windowSource = 'template';
+  }
 
   const totalAvailable = Math.max(0, totalMax - totalCurrent);
   const timeSlots = generateTimeSlots(totalMax);
@@ -1354,7 +1500,9 @@ app.get('/api/slots/:itemId/:date', (req, res) => {
     available_count: totalAvailable,
     time_slots: availableSlots,
     use_windows: true,
-    windows: windowSlots
+    windows: windowSlots,
+    window_source: windowSource,
+    slot_source: windowSource
   });
 });
 
@@ -2794,12 +2942,12 @@ app.put('/api/slots/:itemId/:date/windows/max', (req, res) => {
     updates.forEach(({ windowId, maxCount, usedCount, existing }) => {
       if (existing) {
         db.prepare(
-          'UPDATE window_slots SET max_count = ? WHERE window_id = ? AND item_id = ? AND date = ?'
-        ).run(maxCount, windowId, itemId, date);
+          'UPDATE window_slots SET max_count = ?, source_type = ? WHERE window_id = ? AND item_id = ? AND date = ?'
+        ).run(maxCount, 'manual', windowId, itemId, date);
       } else {
         db.prepare(
-          'INSERT INTO window_slots (window_id, item_id, date, max_count, current_count) VALUES (?, ?, ?, ?, ?)'
-        ).run(windowId, itemId, date, maxCount, usedCount);
+          'INSERT INTO window_slots (window_id, item_id, date, max_count, current_count, source_type) VALUES (?, ?, ?, ?, ?, ?)'
+        ).run(windowId, itemId, date, maxCount, usedCount, 'manual');
       }
     });
   });
@@ -2856,15 +3004,15 @@ app.put('/api/slots/:itemId/:date/window/:windowId/max', (req, res) => {
       return res.status(400).json({ error: '号源数量不能小于已预约数量' });
     }
     db.prepare(
-      'UPDATE window_slots SET max_count = ? WHERE window_id = ? AND item_id = ? AND date = ?'
-    ).run(maxCount, windowId, itemId, date);
+      'UPDATE window_slots SET max_count = ?, source_type = ? WHERE window_id = ? AND item_id = ? AND date = ?'
+    ).run(maxCount, 'manual', windowId, itemId, date);
   } else {
     db.prepare(
-      'INSERT INTO window_slots (window_id, item_id, date, max_count, current_count) VALUES (?, ?, ?, ?, ?)'
-    ).run(windowId, itemId, date, maxCount, usedCount);
+      'INSERT INTO window_slots (window_id, item_id, date, max_count, current_count, source_type) VALUES (?, ?, ?, ?, ?, ?)'
+    ).run(windowId, itemId, date, maxCount, usedCount, 'manual');
   }
 
-  res.json({ success: true, max_count: maxCount });
+  res.json({ success: true, max_count: maxCount, source_type: 'manual' });
 });
 
 app.put('/api/slots/:itemId/:date/max', (req, res) => {
@@ -2886,12 +3034,12 @@ app.put('/api/slots/:itemId/:date/max', (req, res) => {
     if (max_count < existing.current_count) {
       return res.status(400).json({ error: '号源数量不能小于已预约数量' });
     }
-    db.prepare('UPDATE daily_slots SET max_count = ? WHERE item_id = ? AND date = ?').run(max_count, itemId, date);
+    db.prepare('UPDATE daily_slots SET max_count = ?, source_type = ? WHERE item_id = ? AND date = ?').run(max_count, 'manual', itemId, date);
   } else {
-    db.prepare('INSERT INTO daily_slots (item_id, date, max_count, current_count) VALUES (?, ?, ?, 0)').run(itemId, date, max_count);
+    db.prepare('INSERT INTO daily_slots (item_id, date, max_count, current_count, source_type) VALUES (?, ?, ?, 0, ?)').run(itemId, date, max_count, 'manual');
   }
 
-  res.json({ success: true, max_count: parseInt(max_count) });
+  res.json({ success: true, max_count: parseInt(max_count), source_type: 'manual' });
 });
 
 app.get('/api/slots/:itemId/:date/time-slots', (req, res) => {
@@ -3025,14 +3173,14 @@ app.put('/api/slots/:itemId/:date/time-slots', (req, res) => {
       if (existing) {
         db.prepare(`
           UPDATE time_slot_capacities 
-          SET max_count = ?, current_count = ?, sort_order = ?
+          SET max_count = ?, current_count = ?, sort_order = ?, source_type = ?
           WHERE id = ?
-        `).run(maxCount, usedCount, index, existing.id);
+        `).run(maxCount, usedCount, index, 'manual', existing.id);
       } else {
         db.prepare(`
-          INSERT INTO time_slot_capacities (item_id, date, start_time, end_time, max_count, current_count, sort_order)
-          VALUES (?, ?, ?, ?, ?, ?, ?)
-        `).run(itemId, date, ts.start_time, ts.end_time, maxCount, usedCount, index);
+          INSERT INTO time_slot_capacities (item_id, date, start_time, end_time, max_count, current_count, sort_order, source_type)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(itemId, date, ts.start_time, ts.end_time, maxCount, usedCount, index, 'manual');
       }
     });
   });
@@ -3059,6 +3207,450 @@ app.put('/api/slots/:itemId/:date/time-slots', (req, res) => {
     total_current: totalCurrent,
     time_slots: updatedSlots
   });
+});
+
+function getWeekdayFromDate(dateStr) {
+  const date = new Date(dateStr);
+  return date.getDay();
+}
+
+function hasManualDailySlot(itemId, date) {
+  const slot = db.prepare(
+    "SELECT id FROM daily_slots WHERE item_id = ? AND date = ? AND source_type = 'manual'"
+  ).get(itemId, date);
+  return !!slot;
+}
+
+function hasManualTimeSlots(itemId, date) {
+  const count = db.prepare(
+    "SELECT COUNT(*) as cnt FROM time_slot_capacities WHERE item_id = ? AND date = ? AND source_type = 'manual'"
+  ).get(itemId, date).cnt;
+  return count > 0;
+}
+
+function hasManualWindowSlots(itemId, date) {
+  const count = db.prepare(
+    "SELECT COUNT(*) as cnt FROM window_slots WHERE item_id = ? AND date = ? AND source_type = 'manual'"
+  ).get(itemId, date).cnt;
+  return count > 0;
+}
+
+function getWeeklyDailyTemplate(itemId, weekday) {
+  return db.prepare(
+    'SELECT * FROM weekly_daily_templates WHERE item_id = ? AND weekday = ?'
+  ).get(itemId, weekday);
+}
+
+function getWeeklyTimeSlotTemplates(itemId, weekday) {
+  return db.prepare(`
+    SELECT * FROM weekly_time_slot_templates 
+    WHERE item_id = ? AND weekday = ? 
+    ORDER BY sort_order ASC, start_time ASC
+  `).all(itemId, weekday);
+}
+
+function getWeeklyWindowTemplates(itemId, weekday) {
+  return db.prepare(`
+    SELECT wwt.*, w.name as window_name, w.status as window_status, w.sort_order
+    FROM weekly_window_templates wwt
+    LEFT JOIN windows w ON wwt.window_id = w.id
+    WHERE wwt.item_id = ? AND wwt.weekday = ?
+    ORDER BY w.sort_order ASC, w.id ASC
+  `).all(itemId, weekday);
+}
+
+function getEffectiveWindowSlot(itemId, windowId, date, defaultCapacity) {
+  const weekday = getWeekdayFromDate(date);
+
+  let ws = db.prepare(
+    "SELECT * FROM window_slots WHERE window_id = ? AND item_id = ? AND date = ? AND source_type = 'manual'"
+  ).get(windowId, itemId, date);
+
+  if (ws) {
+    return { slot: ws, source: 'manual' };
+  }
+
+  const windowTemplate = db.prepare(
+    'SELECT * FROM weekly_window_templates WHERE item_id = ? AND window_id = ? AND weekday = ?'
+  ).get(itemId, windowId, weekday);
+
+  if (windowTemplate) {
+    let templateWs = db.prepare(
+      "SELECT * FROM window_slots WHERE window_id = ? AND item_id = ? AND date = ? AND source_type = 'template'"
+    ).get(windowId, itemId, date);
+
+    if (templateWs) {
+      return { slot: templateWs, source: 'template' };
+    }
+
+    db.prepare(
+      "INSERT INTO window_slots (window_id, item_id, date, max_count, current_count, source_type) VALUES (?, ?, ?, ?, 0, 'template')"
+    ).run(windowId, itemId, date, windowTemplate.max_count);
+
+    templateWs = db.prepare(
+      "SELECT * FROM window_slots WHERE window_id = ? AND item_id = ? AND date = ? AND source_type = 'template'"
+    ).get(windowId, itemId, date);
+
+    return { slot: templateWs, source: 'template' };
+  }
+
+  let defaultWs = db.prepare(
+    'SELECT * FROM window_slots WHERE window_id = ? AND item_id = ? AND date = ?'
+  ).get(windowId, itemId, date);
+
+  if (!defaultWs) {
+    db.prepare(
+      "INSERT INTO window_slots (window_id, item_id, date, max_count, current_count, source_type) VALUES (?, ?, ?, ?, 0, 'template')"
+    ).run(windowId, itemId, date, defaultCapacity);
+    defaultWs = db.prepare(
+      'SELECT * FROM window_slots WHERE window_id = ? AND item_id = ? AND date = ?'
+    ).get(windowId, itemId, date);
+  }
+
+  return { slot: defaultWs, source: defaultWs.source_type || 'template' };
+}
+
+app.get('/api/items/:itemId/weekly-templates', (req, res) => {
+  const { itemId } = req.params;
+
+  const item = db.prepare('SELECT * FROM items WHERE id = ?').get(itemId);
+  if (!item) {
+    return res.status(404).json({ error: '事项不存在' });
+  }
+
+  const dailyTemplates = db.prepare(`
+    SELECT * FROM weekly_daily_templates 
+    WHERE item_id = ? 
+    ORDER BY weekday ASC
+  `).all(itemId);
+
+  const timeSlotTemplates = db.prepare(`
+    SELECT * FROM weekly_time_slot_templates 
+    WHERE item_id = ? 
+    ORDER BY weekday ASC, sort_order ASC, start_time ASC
+  `).all(itemId);
+
+  const windowTemplates = db.prepare(`
+    SELECT wwt.*, w.name as window_name, w.status as window_status, w.sort_order
+    FROM weekly_window_templates wwt
+    LEFT JOIN windows w ON wwt.window_id = w.id
+    WHERE wwt.item_id = ?
+    ORDER BY wwt.weekday ASC, w.sort_order ASC, w.id ASC
+  `).all(itemId);
+
+  const timeSlotsByWeekday = {};
+  timeSlotTemplates.forEach(ts => {
+    if (!timeSlotsByWeekday[ts.weekday]) {
+      timeSlotsByWeekday[ts.weekday] = [];
+    }
+    timeSlotsByWeekday[ts.weekday].push(ts);
+  });
+
+  const windowsByWeekday = {};
+  windowTemplates.forEach(wt => {
+    if (!windowsByWeekday[wt.weekday]) {
+      windowsByWeekday[wt.weekday] = [];
+    }
+    windowsByWeekday[wt.weekday].push(wt);
+  });
+
+  const weekdayNames = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+  const result = [];
+  for (let i = 0; i < 7; i++) {
+    const daily = dailyTemplates.find(d => d.weekday === i);
+    result.push({
+      weekday: i,
+      weekday_name: weekdayNames[i],
+      has_daily_template: !!daily,
+      max_count: daily ? daily.max_count : null,
+      has_time_slot_template: !!timeSlotsByWeekday[i] && timeSlotsByWeekday[i].length > 0,
+      time_slots: timeSlotsByWeekday[i] || [],
+      has_window_template: !!windowsByWeekday[i] && windowsByWeekday[i].length > 0,
+      windows: windowsByWeekday[i] || []
+    });
+  }
+
+  const allItemWindows = db.prepare(`
+    SELECT iw.*, w.name as window_name, w.status as window_status, w.sort_order
+    FROM item_windows iw
+    LEFT JOIN windows w ON iw.window_id = w.id
+    WHERE iw.item_id = ?
+    ORDER BY w.sort_order ASC, w.id ASC
+  `).all(itemId);
+
+  res.json({
+    item_id: parseInt(itemId),
+    weekdays: result,
+    item_windows: allItemWindows
+  });
+});
+
+app.put('/api/items/:itemId/weekly-templates/daily', (req, res) => {
+  const { itemId } = req.params;
+  const { templates } = req.body;
+
+  const item = db.prepare('SELECT * FROM items WHERE id = ?').get(itemId);
+  if (!item) {
+    return res.status(404).json({ error: '事项不存在' });
+  }
+
+  if (!Array.isArray(templates)) {
+    return res.status(400).json({ error: '模板数据格式错误' });
+  }
+
+  for (const t of templates) {
+    const weekday = parseInt(t.weekday);
+    if (isNaN(weekday) || weekday < 0 || weekday > 6) {
+      return res.status(400).json({ error: '星期值无效，应为0-6' });
+    }
+    const maxCount = parseInt(t.max_count);
+    if (isNaN(maxCount) || maxCount < 0) {
+      return res.status(400).json({ error: `周${weekday}的号源数量无效` });
+    }
+  }
+
+  const tx = db.transaction(() => {
+    db.prepare('DELETE FROM weekly_daily_templates WHERE item_id = ?').run(itemId);
+    db.prepare('DELETE FROM weekly_time_slot_templates WHERE item_id = ?').run(itemId);
+
+    const insertStmt = db.prepare(`
+      INSERT INTO weekly_daily_templates (item_id, weekday, max_count)
+      VALUES (?, ?, ?)
+    `);
+
+    for (const t of templates) {
+      insertStmt.run(itemId, parseInt(t.weekday), parseInt(t.max_count));
+    }
+  });
+
+  try {
+    tx();
+  } catch (e) {
+    return res.status(500).json({ error: '保存失败' });
+  }
+
+  const updated = db.prepare(`
+    SELECT * FROM weekly_daily_templates 
+    WHERE item_id = ? 
+    ORDER BY weekday ASC
+  `).all(itemId);
+
+  res.json({ success: true, daily_templates: updated });
+});
+
+app.put('/api/items/:itemId/weekly-templates/time-slots/:weekday', (req, res) => {
+  const { itemId, weekday } = req.params;
+  const { time_slots } = req.body;
+
+  const item = db.prepare('SELECT * FROM items WHERE id = ?').get(itemId);
+  if (!item) {
+    return res.status(404).json({ error: '事项不存在' });
+  }
+
+  const weekdayNum = parseInt(weekday);
+  if (isNaN(weekdayNum) || weekdayNum < 0 || weekdayNum > 6) {
+    return res.status(400).json({ error: '星期值无效' });
+  }
+
+  if (!Array.isArray(time_slots)) {
+    return res.status(400).json({ error: '时段数据格式错误' });
+  }
+
+  if (time_slots.length === 0) {
+    db.prepare(
+      'DELETE FROM weekly_time_slot_templates WHERE item_id = ? AND weekday = ?'
+    ).run(itemId, weekdayNum);
+    return res.json({ success: true, time_slots: [] });
+  }
+
+  const timeRegex = /^\d{2}:\d{2}$/;
+  for (let i = 0; i < time_slots.length; i++) {
+    const ts = time_slots[i];
+    if (!ts.start_time || !timeRegex.test(ts.start_time)) {
+      return res.status(400).json({ error: `第 ${i + 1} 条时段的开始时间格式不正确` });
+    }
+    if (!ts.end_time || !timeRegex.test(ts.end_time)) {
+      return res.status(400).json({ error: `第 ${i + 1} 条时段的结束时间格式不正确` });
+    }
+    if (ts.start_time >= ts.end_time) {
+      return res.status(400).json({ error: `第 ${i + 1} 条时段的开始时间必须早于结束时间` });
+    }
+    if (ts.max_count === undefined || ts.max_count === null || isNaN(parseInt(ts.max_count)) || parseInt(ts.max_count) < 0) {
+      return res.status(400).json({ error: `第 ${i + 1} 条时段的容量必须为非负整数` });
+    }
+  }
+
+  const sortedSlots = [...time_slots].sort((a, b) => a.start_time.localeCompare(b.start_time));
+  for (let i = 0; i < sortedSlots.length - 1; i++) {
+    if (sortedSlots[i + 1].start_time < sortedSlots[i].end_time) {
+      return res.status(400).json({ 
+        error: `时段 ${sortedSlots[i].start_time}-${sortedSlots[i].end_time} 与 ${sortedSlots[i + 1].start_time}-${sortedSlots[i + 1].end_time} 存在重叠` 
+      });
+    }
+  }
+
+  const tx = db.transaction(() => {
+    db.prepare(
+      'DELETE FROM weekly_time_slot_templates WHERE item_id = ? AND weekday = ?'
+    ).run(itemId, weekdayNum);
+
+    const insertStmt = db.prepare(`
+      INSERT INTO weekly_time_slot_templates 
+      (item_id, weekday, start_time, end_time, max_count, sort_order)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `);
+
+    sortedSlots.forEach((ts, index) => {
+      insertStmt.run(itemId, weekdayNum, ts.start_time, ts.end_time, parseInt(ts.max_count), index);
+    });
+  });
+
+  try {
+    tx();
+  } catch (e) {
+    return res.status(500).json({ error: '保存失败' });
+  }
+
+  const updated = db.prepare(`
+    SELECT * FROM weekly_time_slot_templates 
+    WHERE item_id = ? AND weekday = ?
+    ORDER BY sort_order ASC, start_time ASC
+  `).all(itemId, weekdayNum);
+
+  res.json({ success: true, time_slots: updated });
+});
+
+app.put('/api/items/:itemId/weekly-templates/windows', (req, res) => {
+  const { itemId } = req.params;
+  const { templates } = req.body;
+
+  const item = db.prepare('SELECT * FROM items WHERE id = ?').get(itemId);
+  if (!item) {
+    return res.status(404).json({ error: '事项不存在' });
+  }
+
+  if (!Array.isArray(templates)) {
+    return res.status(400).json({ error: '模板数据格式错误' });
+  }
+
+  for (const t of templates) {
+    const weekday = parseInt(t.weekday);
+    const windowId = parseInt(t.window_id);
+    const maxCount = parseInt(t.max_count);
+
+    if (isNaN(weekday) || weekday < 0 || weekday > 6) {
+      return res.status(400).json({ error: '星期值无效' });
+    }
+    if (!windowId) {
+      return res.status(400).json({ error: '窗口ID无效' });
+    }
+    if (isNaN(maxCount) || maxCount < 0) {
+      return res.status(400).json({ error: '号源数量无效' });
+    }
+
+    const itemWindow = db.prepare(
+      'SELECT * FROM item_windows WHERE item_id = ? AND window_id = ?'
+    ).get(itemId, windowId);
+    if (!itemWindow) {
+      return res.status(400).json({ error: `窗口 ${windowId} 未配置此事项` });
+    }
+  }
+
+  const weekdays = [...new Set(templates.map(t => parseInt(t.weekday)))];
+
+  const tx = db.transaction(() => {
+    for (const wd of weekdays) {
+      db.prepare(
+        'DELETE FROM weekly_window_templates WHERE item_id = ? AND weekday = ?'
+      ).run(itemId, wd);
+    }
+
+    const insertStmt = db.prepare(`
+      INSERT OR REPLACE INTO weekly_window_templates 
+      (item_id, window_id, weekday, max_count)
+      VALUES (?, ?, ?, ?)
+    `);
+
+    for (const t of templates) {
+      insertStmt.run(itemId, parseInt(t.window_id), parseInt(t.weekday), parseInt(t.max_count));
+    }
+  });
+
+  try {
+    tx();
+  } catch (e) {
+    return res.status(500).json({ error: '保存失败' });
+  }
+
+  const updated = db.prepare(`
+    SELECT wwt.*, w.name as window_name, w.status as window_status, w.sort_order
+    FROM weekly_window_templates wwt
+    LEFT JOIN windows w ON wwt.window_id = w.id
+    WHERE wwt.item_id = ?
+    ORDER BY wwt.weekday ASC, w.sort_order ASC, w.id ASC
+  `).all(itemId);
+
+  res.json({ success: true, window_templates: updated });
+});
+
+app.delete('/api/items/:itemId/weekly-templates/daily/:weekday', (req, res) => {
+  const { itemId, weekday } = req.params;
+
+  const item = db.prepare('SELECT * FROM items WHERE id = ?').get(itemId);
+  if (!item) {
+    return res.status(404).json({ error: '事项不存在' });
+  }
+
+  const weekdayNum = parseInt(weekday);
+  if (isNaN(weekdayNum) || weekdayNum < 0 || weekdayNum > 6) {
+    return res.status(400).json({ error: '星期值无效' });
+  }
+
+  db.prepare(
+    'DELETE FROM weekly_daily_templates WHERE item_id = ? AND weekday = ?'
+  ).run(itemId, weekdayNum);
+
+  res.json({ success: true });
+});
+
+app.delete('/api/items/:itemId/weekly-templates/time-slots/:weekday', (req, res) => {
+  const { itemId, weekday } = req.params;
+
+  const item = db.prepare('SELECT * FROM items WHERE id = ?').get(itemId);
+  if (!item) {
+    return res.status(404).json({ error: '事项不存在' });
+  }
+
+  const weekdayNum = parseInt(weekday);
+  if (isNaN(weekdayNum) || weekdayNum < 0 || weekdayNum > 6) {
+    return res.status(400).json({ error: '星期值无效' });
+  }
+
+  db.prepare(
+    'DELETE FROM weekly_time_slot_templates WHERE item_id = ? AND weekday = ?'
+  ).run(itemId, weekdayNum);
+
+  res.json({ success: true });
+});
+
+app.delete('/api/items/:itemId/weekly-templates/windows/:weekday', (req, res) => {
+  const { itemId, weekday } = req.params;
+
+  const item = db.prepare('SELECT * FROM items WHERE id = ?').get(itemId);
+  if (!item) {
+    return res.status(404).json({ error: '事项不存在' });
+  }
+
+  const weekdayNum = parseInt(weekday);
+  if (isNaN(weekdayNum) || weekdayNum < 0 || weekdayNum > 6) {
+    return res.status(400).json({ error: '星期值无效' });
+  }
+
+  db.prepare(
+    'DELETE FROM weekly_window_templates WHERE item_id = ? AND weekday = ?'
+  ).run(itemId, weekdayNum);
+
+  res.json({ success: true });
 });
 
 app.get('/api/reminders', (req, res) => {

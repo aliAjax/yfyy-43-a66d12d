@@ -26,6 +26,7 @@ const state = {
     editingWindowId: null,
     editingItemWindows: [],
     slotModalData: null,
+    weeklyTemplateData: null,
     editingTimeSlots: [],
     confirmCallback: null,
     workstation: {
@@ -691,6 +692,7 @@ function renderItems() {
             <td>
                 <div class="action-buttons">
                     <button class="btn btn-link btn-slot-setting" data-item-id="${item.id}">号源设置</button>
+                    <button class="btn btn-link btn-weekly-template" data-item-id="${item.id}">周期模板</button>
                     <button class="btn btn-link" onclick="editItem(${item.id})">编辑</button>
                     <button class="btn btn-link danger" onclick="deleteItem(${item.id})">删除</button>
                 </div>
@@ -704,6 +706,16 @@ function renderItems() {
             const item = state.items.find(i => i.id === itemId);
             if (item) {
                 openSlotModal(item.id, item.name);
+            }
+        });
+    });
+
+    tbody.querySelectorAll('.btn-weekly-template').forEach(button => {
+        button.addEventListener('click', () => {
+            const itemId = parseInt(button.dataset.itemId, 10);
+            const item = state.items.find(i => i.id === itemId);
+            if (item) {
+                openWeeklyTemplateModal(item.id, item.name);
             }
         });
     });
@@ -2505,7 +2517,7 @@ function openSlotModal(itemId, itemName) {
     document.getElementById('slotInfo').innerHTML = `
         <p><strong>事项：</strong>${escapeHtml(itemName)}</p>
         <p><strong>日期：</strong><input type="date" id="slotDate" value="${today}" style="width:auto;padding:4px 8px;border:1px solid #d9d9d9;border-radius:4px;font-size:13px;"></p>
-        <p id="slotSummary"><strong>当前号源：</strong><span id="slotCurrentCount">-</span> / <span id="slotCurrentMax">-</span></p>
+        <p id="slotSummary"><strong>当前号源：</strong><span id="slotCurrentCount">-</span> / <span id="slotCurrentMax">-</span> <span id="slotSourceBadge"></span></p>
     `;
 
     document.getElementById('slotMaxCount').value = '';
@@ -2565,6 +2577,475 @@ function openSlotModal(itemId, itemName) {
     });
 }
 
+function openWeeklyTemplateModal(itemId, itemName) {
+    if (state.weeklyTemplateData && state.weeklyTemplateData.itemId === itemId) {
+        document.getElementById('weeklyTemplateModal').classList.add('show');
+        return;
+    }
+
+    state.weeklyTemplateData = {
+        itemId,
+        itemName,
+        currentWeekday: 1,
+        currentMode: 'total',
+        templates: [],
+        itemWindows: [],
+        editingTimeSlots: []
+    };
+
+    document.getElementById('weeklyTemplateTitle').textContent = `周期模板配置 - ${itemName}`;
+
+    document.querySelectorAll('.weekday-tab').forEach(tab => {
+        tab.classList.toggle('active', parseInt(tab.dataset.weekday) === 1);
+    });
+    document.querySelectorAll('#weeklyTemplateModal .slot-mode-tab').forEach(tab => {
+        tab.classList.toggle('active', tab.dataset.mode === 'total');
+    });
+
+    document.getElementById('weeklyTemplateTotalGroup').style.display = 'block';
+    document.getElementById('weeklyTemplateTimeGroup').style.display = 'none';
+    document.getElementById('weeklyTemplateWindowGroup').style.display = 'none';
+
+    document.getElementById('weeklyTemplateModal').classList.add('show');
+
+    loadWeeklyTemplates(itemId);
+}
+
+function initWeeklyTemplateModalEvents() {
+    document.querySelectorAll('.weekday-tab').forEach(tab => {
+        tab.addEventListener('click', () => {
+            if (!state.weeklyTemplateData) return;
+            const weekday = parseInt(tab.dataset.weekday);
+            switchWeekday(weekday);
+        });
+    });
+
+    document.querySelectorAll('#weeklyTemplateModal .slot-mode-tab').forEach(tab => {
+        tab.addEventListener('click', () => {
+            if (!state.weeklyTemplateData) return;
+            const mode = tab.dataset.mode;
+            switchWeeklyTemplateMode(mode);
+        });
+    });
+
+    document.getElementById('btnAddWeeklyTimeSlot').addEventListener('click', () => {
+        if (!state.weeklyTemplateData) return;
+        addWeeklyTimeSlot();
+    });
+
+    document.getElementById('btnCopyToWeekdays').addEventListener('click', () => {
+        if (!state.weeklyTemplateData) return;
+        copyWeeklyTemplateToWeekdays();
+    });
+
+    document.getElementById('btnCopyToAllWeek').addEventListener('click', () => {
+        if (!state.weeklyTemplateData) return;
+        copyWeeklyTemplateToAllWeek();
+    });
+
+    document.getElementById('btnClearWeekdayTemplate').addEventListener('click', () => {
+        if (!state.weeklyTemplateData) return;
+        clearCurrentWeekdayTemplate();
+    });
+
+    document.getElementById('btnCancelWeeklyTemplate').addEventListener('click', () => {
+        document.getElementById('weeklyTemplateModal').classList.remove('show');
+    });
+
+    document.getElementById('btnSaveWeeklyTemplate').addEventListener('click', () => {
+        if (!state.weeklyTemplateData) return;
+        saveWeeklyTemplate();
+    });
+}
+
+async function loadWeeklyTemplates(itemId) {
+    try {
+        const res = await fetch(`${API_BASE}/items/${itemId}/weekly-templates`);
+        const data = await res.json();
+        state.weeklyTemplateData.templates = data.weekdays || [];
+        state.weeklyTemplateData.itemWindows = data.item_windows || [];
+        renderCurrentWeekdayTemplate();
+    } catch (e) {
+        console.error('加载周期模板失败', e);
+        showToast('加载周期模板失败', 'error');
+    }
+}
+
+function switchWeekday(weekday) {
+    state.weeklyTemplateData.currentWeekday = weekday;
+    document.querySelectorAll('.weekday-tab').forEach(tab => {
+        tab.classList.toggle('active', parseInt(tab.dataset.weekday) === weekday);
+    });
+    renderCurrentWeekdayTemplate();
+}
+
+function switchWeeklyTemplateMode(mode) {
+    state.weeklyTemplateData.currentMode = mode;
+    document.querySelectorAll('#weeklyTemplateModal .slot-mode-tab').forEach(tab => {
+        tab.classList.toggle('active', tab.dataset.mode === mode);
+    });
+
+    if (mode === 'total') {
+        document.getElementById('weeklyTemplateTotalGroup').style.display = 'block';
+        document.getElementById('weeklyTemplateTimeGroup').style.display = 'none';
+        document.getElementById('weeklyTemplateWindowGroup').style.display = 'none';
+    } else if (mode === 'time') {
+        document.getElementById('weeklyTemplateTotalGroup').style.display = 'none';
+        document.getElementById('weeklyTemplateTimeGroup').style.display = 'block';
+        document.getElementById('weeklyTemplateWindowGroup').style.display = 'none';
+    } else if (mode === 'window') {
+        document.getElementById('weeklyTemplateTotalGroup').style.display = 'none';
+        document.getElementById('weeklyTemplateTimeGroup').style.display = 'none';
+        document.getElementById('weeklyTemplateWindowGroup').style.display = 'block';
+    }
+
+    renderCurrentWeekdayTemplate();
+}
+
+function renderCurrentWeekdayTemplate() {
+    const { currentWeekday, currentMode, templates, itemWindows } = state.weeklyTemplateData;
+    const templateData = templates.find(t => t.weekday === currentWeekday);
+
+    if (currentMode === 'total') {
+        document.getElementById('weeklyTemplateMaxCount').value = templateData && templateData.has_daily_template ? templateData.max_count : '';
+    } else if (currentMode === 'time') {
+        state.weeklyTemplateData.editingTimeSlots = templateData && templateData.time_slots ? templateData.time_slots.map(ts => ({
+            start_time: ts.start_time,
+            end_time: ts.end_time,
+            max_count: ts.max_count
+        })) : [];
+        renderWeeklyTimeSlotList();
+    } else if (currentMode === 'window') {
+        renderWeeklyWindowList(templateData, itemWindows);
+    }
+}
+
+function renderWeeklyTimeSlotList() {
+    const container = document.getElementById('weeklyTemplateTimeList');
+    const slots = state.weeklyTemplateData.editingTimeSlots || [];
+
+    if (slots.length === 0) {
+        container.innerHTML = '<div class="empty-tip">暂无时段，请点击上方按钮添加</div>';
+        return;
+    }
+
+    container.innerHTML = slots.map((ts, index) => `
+        <div class="time-slot-item">
+            <input type="time" value="${ts.start_time}" data-index="${index}" data-field="start_time" class="time-slot-start">
+            <span>至</span>
+            <input type="time" value="${ts.end_time}" data-index="${index}" data-field="end_time" class="time-slot-end">
+            <input type="number" value="${ts.max_count}" min="0" data-index="${index}" data-field="max_count" class="time-slot-max" placeholder="容量">
+            <button type="button" class="btn btn-sm btn-danger time-slot-delete" data-index="${index}">删除</button>
+        </div>
+    `).join('');
+
+    container.querySelectorAll('.time-slot-start, .time-slot-end, .time-slot-max').forEach(input => {
+        input.addEventListener('change', (e) => {
+            const index = parseInt(e.target.dataset.index);
+            const field = e.target.dataset.field;
+            state.weeklyTemplateData.editingTimeSlots[index][field] = e.target.value;
+        });
+    });
+
+    container.querySelectorAll('.time-slot-delete').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            const index = parseInt(e.target.dataset.index);
+            state.weeklyTemplateData.editingTimeSlots.splice(index, 1);
+            renderWeeklyTimeSlotList();
+        });
+    });
+}
+
+function addWeeklyTimeSlot() {
+    state.weeklyTemplateData.editingTimeSlots.push({
+        start_time: '09:00',
+        end_time: '10:00',
+        max_count: 10
+    });
+    renderWeeklyTimeSlotList();
+}
+
+function renderWeeklyWindowList(templateData, itemWindows) {
+    const container = document.getElementById('weeklyTemplateWindowList');
+    const windows = templateData && templateData.windows ? templateData.windows : [];
+    const windowMap = new Map(windows.map(w => [w.window_id, w]));
+
+    if (itemWindows.length === 0) {
+        container.innerHTML = '<div class="empty-tip">该事项暂无窗口配置</div>';
+        return;
+    }
+
+    container.innerHTML = itemWindows.map(iw => {
+        const templateWin = windowMap.get(iw.window_id);
+        const maxCount = templateWin ? templateWin.max_count : 0;
+        return `
+            <div class="window-slot-item">
+                <div class="window-slot-name">${iw.window_name || '窗口' + iw.window_id}</div>
+                <div class="window-slot-input">
+                    <input type="number" min="0" value="${maxCount}" data-window-id="${iw.window_id}" class="weekly-window-max">
+                    <span>个号源</span>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+async function saveWeeklyTemplate() {
+    const { itemId, currentWeekday, currentMode } = state.weeklyTemplateData;
+
+    try {
+        if (currentMode === 'total') {
+            const maxCount = parseInt(document.getElementById('weeklyTemplateMaxCount').value);
+            if (isNaN(maxCount) || maxCount < 1) {
+                showToast('请输入有效的号源数量', 'error');
+                return;
+            }
+
+            const res = await fetch(`${API_BASE}/items/${itemId}/weekly-templates/daily`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    templates: [{ weekday: currentWeekday, max_count: maxCount }]
+                })
+            });
+
+            if (res.ok) {
+                showToast('保存成功', 'success');
+                loadWeeklyTemplates(itemId);
+            } else {
+                const data = await res.json();
+                showToast(data.error || '保存失败', 'error');
+            }
+        } else if (currentMode === 'time') {
+            const timeSlots = state.weeklyTemplateData.editingTimeSlots || [];
+            const res = await fetch(`${API_BASE}/items/${itemId}/weekly-templates/time-slots/${currentWeekday}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ time_slots: timeSlots })
+            });
+
+            if (res.ok) {
+                showToast('保存成功', 'success');
+                loadWeeklyTemplates(itemId);
+            } else {
+                const data = await res.json();
+                showToast(data.error || '保存失败', 'error');
+            }
+        } else if (currentMode === 'window') {
+            const windows = [];
+            document.querySelectorAll('.weekly-window-max').forEach(input => {
+                const windowId = parseInt(input.dataset.windowId);
+                const maxCount = parseInt(input.value) || 0;
+                windows.push({ weekday: currentWeekday, window_id: windowId, max_count: maxCount });
+            });
+
+            const res = await fetch(`${API_BASE}/items/${itemId}/weekly-templates/windows`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ templates: windows })
+            });
+
+            if (res.ok) {
+                showToast('保存成功', 'success');
+                loadWeeklyTemplates(itemId);
+            } else {
+                const data = await res.json();
+                showToast(data.error || '保存失败', 'error');
+            }
+        }
+    } catch (e) {
+        console.error('保存周期模板失败', e);
+        showToast('保存失败', 'error');
+    }
+}
+
+async function copyWeeklyTemplateToWeekdays() {
+    const { itemId, currentWeekday, currentMode, templates } = state.weeklyTemplateData;
+    const currentTemplate = templates.find(t => t.weekday === currentWeekday);
+
+    if (!currentTemplate) {
+        showToast('请先保存当前星期的模板', 'error');
+        return;
+    }
+
+    if (!confirm('确定要将当前星期的模板复制到工作日（周一至周五）吗？')) {
+        return;
+    }
+
+    try {
+        const weekdays = [1, 2, 3, 4, 5];
+
+        if (currentMode === 'total') {
+            const maxCount = currentTemplate.max_count;
+            const templates = weekdays.map(w => ({ weekday: w, max_count: maxCount }));
+            const res = await fetch(`${API_BASE}/items/${itemId}/weekly-templates/daily`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ templates })
+            });
+
+            if (res.ok) {
+                showToast('复制成功', 'success');
+                loadWeeklyTemplates(itemId);
+            } else {
+                const data = await res.json();
+                showToast(data.error || '复制失败', 'error');
+            }
+        } else if (currentMode === 'time') {
+            const timeSlots = currentTemplate.time_slots || [];
+            for (const weekday of weekdays) {
+                await fetch(`${API_BASE}/items/${itemId}/weekly-templates/time-slots/${weekday}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ time_slots: timeSlots })
+                });
+            }
+            showToast('复制成功', 'success');
+            loadWeeklyTemplates(itemId);
+        } else if (currentMode === 'window') {
+            const windows = currentTemplate.windows || [];
+            const templates = [];
+            weekdays.forEach(w => {
+                windows.forEach(win => {
+                    templates.push({ weekday: w, window_id: win.window_id, max_count: win.max_count });
+                });
+            });
+            const res = await fetch(`${API_BASE}/items/${itemId}/weekly-templates/windows`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ templates })
+            });
+
+            if (res.ok) {
+                showToast('复制成功', 'success');
+                loadWeeklyTemplates(itemId);
+            } else {
+                const data = await res.json();
+                showToast(data.error || '复制失败', 'error');
+            }
+        }
+    } catch (e) {
+        console.error('复制模板失败', e);
+        showToast('复制失败', 'error');
+    }
+}
+
+async function copyWeeklyTemplateToAllWeek() {
+    const { itemId, currentWeekday, currentMode, templates } = state.weeklyTemplateData;
+    const currentTemplate = templates.find(t => t.weekday === currentWeekday);
+
+    if (!currentTemplate) {
+        showToast('请先保存当前星期的模板', 'error');
+        return;
+    }
+
+    if (!confirm('确定要将当前星期的模板复制到整周（周一至周日）吗？')) {
+        return;
+    }
+
+    try {
+        const allWeekdays = [0, 1, 2, 3, 4, 5, 6];
+
+        if (currentMode === 'total') {
+            const maxCount = currentTemplate.max_count;
+            const templates = allWeekdays.map(w => ({ weekday: w, max_count: maxCount }));
+            const res = await fetch(`${API_BASE}/items/${itemId}/weekly-templates/daily`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ templates })
+            });
+
+            if (res.ok) {
+                showToast('复制成功', 'success');
+                loadWeeklyTemplates(itemId);
+            } else {
+                const data = await res.json();
+                showToast(data.error || '复制失败', 'error');
+            }
+        } else if (currentMode === 'time') {
+            const timeSlots = currentTemplate.time_slots || [];
+            for (const weekday of allWeekdays) {
+                await fetch(`${API_BASE}/items/${itemId}/weekly-templates/time-slots/${weekday}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ time_slots: timeSlots })
+                });
+            }
+            showToast('复制成功', 'success');
+            loadWeeklyTemplates(itemId);
+        } else if (currentMode === 'window') {
+            const windows = currentTemplate.windows || [];
+            const templates = [];
+            allWeekdays.forEach(w => {
+                windows.forEach(win => {
+                    templates.push({ weekday: w, window_id: win.window_id, max_count: win.max_count });
+                });
+            });
+            const res = await fetch(`${API_BASE}/items/${itemId}/weekly-templates/windows`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ templates })
+            });
+
+            if (res.ok) {
+                showToast('复制成功', 'success');
+                loadWeeklyTemplates(itemId);
+            } else {
+                const data = await res.json();
+                showToast(data.error || '复制失败', 'error');
+            }
+        }
+    } catch (e) {
+        console.error('复制模板失败', e);
+        showToast('复制失败', 'error');
+    }
+}
+
+async function clearCurrentWeekdayTemplate() {
+    const { itemId, currentWeekday, currentMode } = state.weeklyTemplateData;
+
+    if (!confirm('确定要清除当前星期的模板吗？')) {
+        return;
+    }
+
+    try {
+        if (currentMode === 'total') {
+            const res = await fetch(`${API_BASE}/items/${itemId}/weekly-templates/daily/${currentWeekday}`, {
+                method: 'DELETE'
+            });
+            if (res.ok) {
+                showToast('清除成功', 'success');
+                loadWeeklyTemplates(itemId);
+            } else {
+                showToast('清除失败', 'error');
+            }
+        } else if (currentMode === 'time') {
+            const res = await fetch(`${API_BASE}/items/${itemId}/weekly-templates/time-slots/${currentWeekday}`, {
+                method: 'DELETE'
+            });
+            if (res.ok) {
+                showToast('清除成功', 'success');
+                loadWeeklyTemplates(itemId);
+            } else {
+                showToast('清除失败', 'error');
+            }
+        } else if (currentMode === 'window') {
+            const res = await fetch(`${API_BASE}/items/${itemId}/weekly-templates/windows/${currentWeekday}`, {
+                method: 'DELETE'
+            });
+            if (res.ok) {
+                showToast('清除成功', 'success');
+                loadWeeklyTemplates(itemId);
+            } else {
+                showToast('清除失败', 'error');
+            }
+        }
+    } catch (e) {
+        console.error('清除模板失败', e);
+        showToast('清除失败', 'error');
+    }
+}
+
 async function loadSlotInfo(itemId, date) {
     try {
         const res = await fetch(`${API_BASE}/slots/${itemId}/${date}`);
@@ -2572,6 +3053,18 @@ async function loadSlotInfo(itemId, date) {
 
         state.slotModalData.useWindows = data.use_windows || false;
         state.slotModalData.useTimeSlots = data.use_time_slots || false;
+        state.slotModalData.slotSource = data.slot_source || 'default';
+
+        const sourceBadge = document.getElementById('slotSourceBadge');
+        if (sourceBadge) {
+            if (data.slot_source === 'manual') {
+                sourceBadge.innerHTML = '<span class="slot-source-badge manual">单日覆盖</span>';
+            } else if (data.slot_source === 'template') {
+                sourceBadge.innerHTML = '<span class="slot-source-badge template">模板生成</span>';
+            } else {
+                sourceBadge.innerHTML = '';
+            }
+        }
 
         if (data.available !== undefined || data.use_windows || data.use_time_slots) {
             document.getElementById('slotCurrentCount').textContent = data.current_count || 0;
@@ -2584,7 +3077,8 @@ async function loadSlotInfo(itemId, date) {
                     end_time: ts.end_time,
                     max_count: ts.max_count,
                     current_count: ts.current_count,
-                    id: ts.id
+                    id: ts.id,
+                    source_type: ts.source_type
                 }));
 
                 document.querySelectorAll('.slot-mode-tab').forEach(t => {
@@ -3158,6 +3652,7 @@ function init() {
     initTodayDate();
     initNavigation();
     initModals();
+    initWeeklyTemplateModalEvents();
     loadDashboard();
     
     const btnSaveSettings = document.getElementById('btnSaveSettings');
@@ -3178,6 +3673,7 @@ window.editItem = editItem;
 window.deleteItem = deleteItem;
 window.deleteHoliday = deleteHoliday;
 window.openSlotModal = openSlotModal;
+window.openWeeklyTemplateModal = openWeeklyTemplateModal;
 window.addMaterial = addMaterial;
 window.removeMaterial = removeMaterial;
 window.moveMaterial = moveMaterial;
