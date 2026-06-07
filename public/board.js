@@ -2,7 +2,10 @@ const API_BASE = '/api';
 const REFRESH_INTERVAL = 30 * 1000;
 
 let boardData = null;
+let windowBoardData = null;
+let currentView = 'item';
 let previousCallingIds = new Set();
+let previousWindowCallingIds = new Set();
 let refreshTimer = null;
 let timeTimer = null;
 
@@ -357,7 +360,155 @@ function showCallingOverlay(apt) {
 }
 
 function refreshBoard() {
-    loadBoardData();
+    if (currentView === 'item') {
+        loadBoardData();
+    } else {
+        loadWindowBoardData();
+    }
+}
+
+function switchView(view) {
+    if (currentView === view) return;
+
+    currentView = view;
+
+    document.querySelectorAll('.btn-view').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.view === view);
+    });
+
+    if (view === 'item') {
+        loadBoardData();
+    } else {
+        loadWindowBoardData();
+    }
+}
+
+async function loadWindowBoardData() {
+    try {
+        const res = await fetch(`${API_BASE}/board/windows`);
+        const data = await res.json();
+
+        const currentCallingIds = new Set();
+        data.windows.forEach(w => {
+            if (w.current_calling) {
+                currentCallingIds.add(w.current_calling.id);
+            }
+        });
+
+        const newCallings = [];
+        currentCallingIds.forEach(id => {
+            if (!previousWindowCallingIds.has(id)) {
+                data.windows.forEach(w => {
+                    if (w.current_calling && w.current_calling.id === id) {
+                        newCallings.push({ 
+                            ...w.current_calling, 
+                            window_name: w.window_name,
+                            item_name: w.current_calling.item_name || ''
+                        });
+                    }
+                });
+            }
+        });
+
+        previousWindowCallingIds = currentCallingIds;
+        windowBoardData = data;
+
+        renderWindowBoard(data);
+        updateLastUpdate();
+
+        if (newCallings.length > 0) {
+            showCallingOverlay(newCallings[0]);
+        }
+
+    } catch (e) {
+        console.error('加载窗口看板数据失败', e);
+        document.getElementById('boardContent').innerHTML = `
+            <div class="error-state">
+                <div class="error-icon">⚠️</div>
+                <p>加载失败，请稍后重试</p>
+                <button class="btn-retry" onclick="refreshBoard()">重新加载</button>
+            </div>
+        `;
+    }
+}
+
+function renderWindowBoard(data) {
+    document.getElementById('statTotal').textContent = data.windows.reduce((sum, w) => sum + w.total_count, 0);
+    document.getElementById('statCalling').textContent = data.summary.calling;
+    document.getElementById('statWaiting').textContent = data.summary.waiting;
+    document.getElementById('statCompleted').textContent = data.summary.completed;
+
+    const content = document.getElementById('boardContent');
+
+    if (data.windows.length === 0) {
+        content.innerHTML = `
+            <div class="empty-state">
+                <div class="empty-icon">🪟</div>
+                <p>暂无可用窗口</p>
+            </div>
+        `;
+        return;
+    }
+
+    let html = '<div class="windows-grid">';
+    data.windows.forEach(win => {
+        html += renderWindowCard(win);
+    });
+    html += '</div>';
+
+    content.innerHTML = html;
+}
+
+function renderWindowCard(win) {
+    const hasCalling = !!win.current_calling;
+    const waitingCount = win.waiting_count;
+
+    return `
+        <div class="window-card ${hasCalling ? 'has-calling' : ''}">
+            <div class="window-card-header">
+                <h3 class="window-name">${escapeHtml(win.window_name)}</h3>
+                <div class="window-counts">
+                    <span class="count-badge count-calling">叫号 ${hasCalling ? 1 : 0}</span>
+                    <span class="count-badge count-waiting">等待 ${waitingCount}</span>
+                    <span class="count-badge count-completed">完成 ${win.completed_count}</span>
+                </div>
+            </div>
+
+            <div class="window-card-body">
+                ${hasCalling ? `
+                    <div class="calling-section">
+                        <div class="section-title">🔔 正在叫号</div>
+                        <div class="calling-list">
+                            <div class="calling-item calling-pulse" data-id="${win.current_calling.id}">
+                                <div class="calling-number-big">${padNumber(win.current_calling.queue_number)}</div>
+                                <div class="calling-info">
+                                    <div class="calling-name">${escapeHtml(win.current_calling.user_name)}</div>
+                                    <div class="calling-time">${win.current_calling.time_slot} 时段</div>
+                                    <div class="calling-item-name">${escapeHtml(win.current_calling.item_name || '')}</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                ` : `
+                    <div class="no-calling">
+                        <div class="no-calling-icon">⏸</div>
+                        <div class="no-calling-text">暂无叫号</div>
+                    </div>
+                `}
+
+                <div class="waiting-section">
+                    <div class="section-title">📋 等待列表 (${waitingCount})</div>
+                    ${waitingCount > 0 ? `
+                        <div class="waiting-mini-list">
+                            <span class="waiting-hint">还有 ${waitingCount} 人等待</span>
+                        </div>
+                    ` : `
+                        <div class="no-waiting">暂无等待</div>
+                    `}
+                </div>
+            </div>
+        </div>
+    `;
 }
 
 function startAutoRefresh() {
@@ -365,7 +516,11 @@ function startAutoRefresh() {
         clearInterval(refreshTimer);
     }
     refreshTimer = setInterval(() => {
-        loadBoardData();
+        if (currentView === 'item') {
+            loadBoardData();
+        } else {
+            loadWindowBoardData();
+        }
     }, REFRESH_INTERVAL);
 }
 
@@ -381,5 +536,6 @@ function init() {
 }
 
 window.refreshBoard = refreshBoard;
+window.switchView = switchView;
 
 document.addEventListener('DOMContentLoaded', init);

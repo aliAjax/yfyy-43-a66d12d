@@ -53,6 +53,10 @@
                 <span class="last-update">最后更新: <span id="lastUpdate">--:--:--</span></span>
             </div>
             <div class="footer-actions">
+                <div class="view-toggle">
+                    <button class="btn-view active" data-view="item" onclick="switchView('item')">按事项</button>
+                    <button class="btn-view" data-view="window" onclick="switchView('window')">按窗口</button>
+                </div>
                 <button class="btn-refresh" onclick="refreshBoard()" title="手动刷新">🔄 刷新</button>
             </div>
         </footer>

@@ -3223,6 +3223,258 @@ app.get('/board', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'board.html'));
 });
 
+app.get('/api/windows/:windowId/queue', (req, res) => {
+  const { windowId } = req.params;
+  const today = getTodayStr();
+
+  const window = db.prepare('SELECT * FROM windows WHERE id = ?').get(windowId);
+  if (!window) {
+    return res.status(404).json({ error: '窗口不存在' });
+  }
+
+  const appointments = db.prepare(`
+    SELECT a.*, i.name as item_name, w.name as window_name
+    FROM appointments a
+    LEFT JOIN items i ON a.item_id = i.id
+    LEFT JOIN windows w ON a.window_id = w.id
+    WHERE a.window_id = ? AND a.appointment_date = ? AND a.status IN ('arrived', 'calling')
+    ORDER BY 
+      CASE a.status WHEN 'calling' THEN 0 WHEN 'arrived' THEN 1 END,
+      a.queue_number ASC
+  `).all(windowId, today);
+
+  const calling = appointments.filter(a => a.status === 'calling');
+  const waiting = appointments.filter(a => a.status === 'arrived');
+
+  const totalApts = db.prepare(`
+    SELECT COUNT(*) as cnt FROM appointments
+    WHERE window_id = ? AND appointment_date = ? AND status != 'cancelled'
+  `).get(windowId, today).cnt;
+
+  const completedApts = db.prepare(`
+    SELECT COUNT(*) as cnt FROM appointments
+    WHERE window_id = ? AND appointment_date = ? AND status = 'completed'
+  `).get(windowId, today).cnt;
+
+  res.json({
+    window: window,
+    date: today,
+    calling: calling,
+    waiting: waiting,
+    total_count: totalApts,
+    waiting_count: waiting.length,
+    completed_count: completedApts,
+    has_calling: calling.length > 0
+  });
+});
+
+app.post('/api/windows/:windowId/call-next', (req, res) => {
+  const { windowId } = req.params;
+  const today = getTodayStr();
+
+  const window = db.prepare('SELECT * FROM windows WHERE id = ?').get(windowId);
+  if (!window) {
+    return res.status(404).json({ error: '窗口不存在' });
+  }
+
+  const currentCalling = db.prepare(
+    'SELECT id FROM appointments WHERE window_id = ? AND appointment_date = ? AND status = ?'
+  ).get(windowId, today, 'calling');
+
+  if (currentCalling) {
+    return res.status(400).json({ error: '该窗口已有正在叫号的预约，请先完成或跳过' });
+  }
+
+  const nextApt = db.prepare(`
+    SELECT a.*, i.name as item_name
+    FROM appointments a
+    LEFT JOIN items i ON a.item_id = i.id
+    WHERE a.window_id = ? AND a.appointment_date = ? AND a.status = ?
+    ORDER BY a.queue_number ASC
+    LIMIT 1
+  `).get(windowId, today, 'arrived');
+
+  if (!nextApt) {
+    return res.json({ success: true, has_next: false, message: '暂无等待叫号的预约' });
+  }
+
+  const tx = db.transaction(() => {
+    const recheck = db.prepare(
+      'SELECT id FROM appointments WHERE window_id = ? AND appointment_date = ? AND status = ?'
+    ).get(windowId, today, 'calling');
+    if (recheck) {
+      throw new Error('该窗口已有正在叫号的预约');
+    }
+
+    db.prepare('UPDATE appointments SET status = ?, called_at = CURRENT_TIMESTAMP WHERE id = ?').run('calling', nextApt.id);
+
+    const reminderContent = generateReminderContent('calling', {
+      item_name: nextApt.item_name || '',
+      window_name: window.name || '',
+      appointment_date: nextApt.appointment_date,
+      time_slot: nextApt.time_slot,
+      user_name: nextApt.user_name,
+      queue_number: nextApt.queue_number
+    });
+    createReminder(nextApt.id, nextApt.phone, 'calling', reminderContent);
+  });
+
+  try {
+    tx();
+    res.json({ success: true, has_next: true, appointment: nextApt, message: '叫号成功' });
+  } catch (e) {
+    if (e.message === '该窗口已有正在叫号的预约') {
+      res.status(400).json({ error: e.message });
+    } else {
+      res.status(500).json({ error: '叫号失败' });
+    }
+  }
+});
+
+app.post('/api/windows/:windowId/complete', (req, res) => {
+  const { windowId } = req.params;
+  const today = getTodayStr();
+
+  const window = db.prepare('SELECT * FROM windows WHERE id = ?').get(windowId);
+  if (!window) {
+    return res.status(404).json({ error: '窗口不存在' });
+  }
+
+  const currentApt = db.prepare(
+    'SELECT * FROM appointments WHERE window_id = ? AND appointment_date = ? AND status = ?'
+  ).get(windowId, today, 'calling');
+
+  if (!currentApt) {
+    return res.status(400).json({ error: '该窗口当前没有正在叫号的预约' });
+  }
+
+  const item = db.prepare('SELECT name FROM items WHERE id = ?').get(currentApt.item_id);
+
+  db.prepare('UPDATE appointments SET status = ? WHERE id = ?').run('completed', currentApt.id);
+
+  const reminderContent = generateReminderContent('completed', {
+    item_name: item ? item.name : '',
+    window_name: window.name || '',
+    appointment_date: currentApt.appointment_date,
+    time_slot: currentApt.time_slot,
+    user_name: currentApt.user_name,
+    queue_number: currentApt.queue_number
+  });
+  createReminder(currentApt.id, currentApt.phone, 'completed', reminderContent);
+
+  res.json({ success: true, message: '办理完成', completed_appointment: currentApt });
+});
+
+app.post('/api/windows/:windowId/skip', (req, res) => {
+  const { windowId } = req.params;
+  const today = getTodayStr();
+
+  const window = db.prepare('SELECT * FROM windows WHERE id = ?').get(windowId);
+  if (!window) {
+    return res.status(404).json({ error: '窗口不存在' });
+  }
+
+  const currentApt = db.prepare(
+    'SELECT * FROM appointments WHERE window_id = ? AND appointment_date = ? AND status = ?'
+  ).get(windowId, today, 'calling');
+
+  if (!currentApt) {
+    return res.status(400).json({ error: '该窗口当前没有正在叫号的预约' });
+  }
+
+  const tx = db.transaction(() => {
+    db.prepare('UPDATE appointments SET status = ? WHERE id = ?').run('arrived', currentApt.id);
+
+    const nextApt = db.prepare(`
+      SELECT a.*, i.name as item_name
+      FROM appointments a
+      LEFT JOIN items i ON a.item_id = i.id
+      WHERE a.window_id = ? AND a.appointment_date = ? AND a.status = ? AND a.id != ?
+      ORDER BY a.queue_number ASC
+      LIMIT 1
+    `).get(windowId, today, 'arrived', currentApt.id);
+
+    if (nextApt) {
+      db.prepare('UPDATE appointments SET status = ?, called_at = CURRENT_TIMESTAMP WHERE id = ?').run('calling', nextApt.id);
+      const reminderContent = generateReminderContent('calling', {
+        item_name: nextApt.item_name || '',
+        window_name: window.name || '',
+        appointment_date: nextApt.appointment_date,
+        time_slot: nextApt.time_slot,
+        user_name: nextApt.user_name,
+        queue_number: nextApt.queue_number
+      });
+      createReminder(nextApt.id, nextApt.phone, 'calling', reminderContent);
+      return { has_next: true, next: nextApt, skipped: currentApt };
+    }
+
+    return { has_next: false, next: null, skipped: currentApt };
+  });
+
+  try {
+    const result = tx();
+    res.json({
+      success: true,
+      has_next: result.has_next,
+      next_appointment: result.next,
+      skipped_appointment: result.skipped,
+      message: result.has_next ? '已跳过，叫下一位' : '已跳过，暂无下一位'
+    });
+  } catch (e) {
+    res.status(500).json({ error: '操作失败' });
+  }
+});
+
+app.get('/api/board/windows', (req, res) => {
+  const today = getTodayStr();
+
+  const windows = db.prepare('SELECT * FROM windows WHERE status = ? ORDER BY sort_order ASC, id ASC').all('active');
+
+  const result = windows.map(window => {
+    const appointments = db.prepare(`
+      SELECT a.*, i.name as item_name
+      FROM appointments a
+      LEFT JOIN items i ON a.item_id = i.id
+      WHERE a.window_id = ? AND a.appointment_date = ?
+      ORDER BY a.queue_number ASC
+    `).all(window.id, today);
+
+    const calling = appointments.filter(a => a.status === 'calling');
+    const waiting = appointments.filter(a => a.status === 'arrived');
+    const completed = appointments.filter(a => a.status === 'completed');
+    const pending = appointments.filter(a => a.status === 'pending');
+
+    const currentCalling = calling.length > 0 ? calling[0] : null;
+
+    return {
+      window_id: window.id,
+      window_name: window.name,
+      window_description: window.description,
+      current_calling: currentCalling,
+      current_number: currentCalling ? currentCalling.queue_number : null,
+      waiting_count: waiting.length,
+      completed_count: completed.length,
+      pending_count: pending.length,
+      total_count: appointments.length
+    };
+  });
+
+  const totalCalling = result.filter(r => r.current_calling).length;
+  const totalWaiting = result.reduce((sum, r) => sum + r.waiting_count, 0);
+  const totalCompleted = result.reduce((sum, r) => sum + r.completed_count, 0);
+
+  res.json({
+    date: today,
+    windows: result,
+    summary: {
+      total_windows: windows.length,
+      calling: totalCalling,
+      waiting: totalWaiting,
+      completed: totalCompleted
+    }
+  });
+});
+
 app.listen(PORT, () => {
   console.log(`预约系统已启动: http://localhost:${PORT}`);
   console.log(`后台管理: http://localhost:${PORT}/admin`);

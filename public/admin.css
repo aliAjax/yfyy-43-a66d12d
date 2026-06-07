@@ -1209,3 +1209,261 @@ body {
     height: 16px;
     cursor: pointer;
 }
+
+.form-select {
+    padding: 8px 12px;
+    border: 1px solid #d9d9d9;
+    border-radius: 6px;
+    font-size: 14px;
+    background: #fff;
+    min-width: 180px;
+    cursor: pointer;
+}
+
+.form-select:focus {
+    outline: none;
+    border-color: #667eea;
+}
+
+.workstation-stats {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+    margin-bottom: 24px;
+}
+
+.ws-stat-card {
+    background: white;
+    border-radius: 12px;
+    padding: 20px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+    text-align: center;
+}
+
+.ws-stat-label {
+    font-size: 13px;
+    color: #999;
+    margin-bottom: 8px;
+}
+
+.ws-stat-value {
+    font-size: 32px;
+    font-weight: 700;
+    color: #333;
+}
+
+.ws-stat-calling .ws-stat-value {
+    color: #ff6b35;
+}
+
+.ws-stat-waiting .ws-stat-value {
+    color: #1890ff;
+}
+
+.ws-stat-completed .ws-stat-value {
+    color: #52c41a;
+}
+
+.ws-stat-total .ws-stat-value {
+    color: #667eea;
+}
+
+.workstation-main {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+}
+
+.ws-current-section,
+.ws-queue-section {
+    background: white;
+    border-radius: 12px;
+    padding: 20px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+
+.ws-current-section h4,
+.ws-queue-section h4 {
+    font-size: 16px;
+    margin-bottom: 16px;
+    color: #333;
+}
+
+.ws-current-card {
+    background: linear-gradient(135deg, #fff7e6 0%, #ffe7ba 100%);
+    border-radius: 12px;
+    padding: 24px;
+    margin-bottom: 20px;
+    min-height: 140px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.ws-calling-item {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+}
+
+.ws-calling-number {
+    font-size: 56px;
+    font-weight: 700;
+    color: #ff6b35;
+    font-family: 'Courier New', monospace;
+}
+
+.ws-calling-info {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.ws-calling-name {
+    font-size: 20px;
+    font-weight: 600;
+    color: #333;
+}
+
+.ws-calling-item-name {
+    font-size: 14px;
+    color: #666;
+}
+
+.ws-calling-time {
+    font-size: 13px;
+    color: #999;
+}
+
+.ws-no-calling {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    color: #999;
+}
+
+.ws-no-calling-icon {
+    font-size: 36px;
+    opacity: 0.5;
+}
+
+.ws-no-calling-text {
+    font-size: 14px;
+}
+
+.ws-action-buttons {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.btn-lg {
+    padding: 14px 20px;
+    font-size: 16px;
+    font-weight: 500;
+}
+
+.btn-warning {
+    background: #faad14;
+    border-color: #faad14;
+    color: white;
+}
+
+.btn-warning:hover:not(:disabled) {
+    background: #d48806;
+    border-color: #d48806;
+}
+
+.btn-warning:disabled {
+    background: #ffd666;
+    border-color: #ffd666;
+    cursor: not-allowed;
+    opacity: 0.7;
+}
+
+.ws-queue-list {
+    max-height: 500px;
+    overflow-y: auto;
+}
+
+.ws-queue-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px;
+    border-radius: 8px;
+    background: #fafafa;
+    margin-bottom: 8px;
+    transition: all 0.2s;
+}
+
+.ws-queue-item:hover {
+    background: #f0f0f0;
+}
+
+.ws-queue-item.priority {
+    background: #e6f7ff;
+    border-left: 3px solid #1890ff;
+}
+
+.ws-queue-num {
+    font-size: 20px;
+    font-weight: 700;
+    color: #1890ff;
+    font-family: 'Courier New', monospace;
+    min-width: 60px;
+}
+
+.ws-queue-info {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.ws-queue-name {
+    font-size: 14px;
+    font-weight: 500;
+    color: #333;
+}
+
+.ws-queue-item-name {
+    font-size: 12px;
+    color: #666;
+}
+
+.ws-queue-time {
+    font-size: 12px;
+    color: #999;
+}
+
+.ws-queue-order {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: #fff;
+    color: #999;
+    font-size: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 500;
+    border: 1px solid #e8e8e8;
+}
+
+.ws-queue-item.priority .ws-queue-order {
+    background: #1890ff;
+    color: white;
+    border-color: #1890ff;
+}
+
+@media (max-width: 1024px) {
+    .workstation-stats {
+        grid-template-columns: repeat(2, 1fr);
+    }
+    
+    .workstation-main {
+        grid-template-columns: 1fr;
+    }
+}

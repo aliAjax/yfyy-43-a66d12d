@@ -27,7 +27,12 @@ const state = {
     editingItemWindows: [],
     slotModalData: null,
     editingTimeSlots: [],
-    confirmCallback: null
+    confirmCallback: null,
+    workstation: {
+        selectedWindowId: null,
+        queueData: null,
+        refreshTimer: null
+    }
 };
 
 const API_BASE = '/api';
@@ -166,7 +171,8 @@ function switchTab(tab) {
         reviews: '评价管理',
         reschedules: '改期记录',
         restrictions: '手机号限制',
-        windows: '窗口管理'
+        windows: '窗口管理',
+        'window-workstation': '窗口工作台'
     };
     document.getElementById('pageTitle').textContent = titles[tab];
 
@@ -188,6 +194,12 @@ function switchTab(tab) {
         loadRestrictions();
     } else if (tab === 'windows') {
         loadWindows();
+    } else if (tab === 'window-workstation') {
+        loadWindowWorkstation();
+    }
+
+    if (state.currentTab !== 'window-workstation' && state.workstation.refreshTimer) {
+        stopWorkstationAutoRefresh();
     }
 }
 
@@ -1735,6 +1747,207 @@ async function toggleWindowStatus(id, status) {
     });
 }
 
+async function loadWindowWorkstation() {
+    try {
+        if (state.windows.length === 0) {
+            const res = await fetch(`${API_BASE}/windows?status=active`);
+            state.windows = await res.json();
+        }
+
+        const select = document.getElementById('workstationWindowSelect');
+        const activeWindows = state.windows.filter(w => w.status === 'active');
+        select.innerHTML = '<option value="">请选择窗口</option>' +
+            activeWindows.map(w => `<option value="${w.id}">${escapeHtml(w.name)}</option>`).join('');
+
+        if (!state.workstation._listenerBound) {
+            select.addEventListener('change', (e) => {
+                const windowId = e.target.value;
+                if (windowId) {
+                    state.workstation.selectedWindowId = parseInt(windowId);
+                    document.getElementById('workstationContent').style.display = 'block';
+                    loadWindowQueue();
+                    startWorkstationAutoRefresh();
+                } else {
+                    state.workstation.selectedWindowId = null;
+                    document.getElementById('workstationContent').style.display = 'none';
+                    stopWorkstationAutoRefresh();
+                }
+            });
+            state.workstation._listenerBound = true;
+        }
+
+        if (state.workstation.selectedWindowId) {
+            select.value = state.workstation.selectedWindowId;
+            document.getElementById('workstationContent').style.display = 'block';
+            loadWindowQueue();
+            startWorkstationAutoRefresh();
+        }
+    } catch (e) {
+        showToast('加载窗口列表失败', 'error');
+    }
+}
+
+async function loadWindowQueue() {
+    if (!state.workstation.selectedWindowId) return;
+
+    try {
+        const res = await fetch(`${API_BASE}/windows/${state.workstation.selectedWindowId}/queue`);
+        const data = await res.json();
+
+        if (!res.ok) {
+            throw new Error(data.error || '加载失败');
+        }
+
+        state.workstation.queueData = data;
+        renderWorkstationQueue(data);
+    } catch (e) {
+        console.error('加载窗口队列失败', e);
+    }
+}
+
+function renderWorkstationQueue(data) {
+    document.getElementById('wsStatCalling').textContent = data.calling.length;
+    document.getElementById('wsStatWaiting').textContent = data.waiting_count;
+    document.getElementById('wsStatCompleted').textContent = data.completed_count;
+    document.getElementById('wsStatTotal').textContent = data.total_count;
+
+    const currentCallingEl = document.getElementById('wsCurrentCalling');
+    const btnSkip = document.getElementById('wsBtnSkip');
+    const btnComplete = document.getElementById('wsBtnComplete');
+    const btnCallNext = document.getElementById('wsBtnCallNext');
+
+    if (data.calling.length > 0) {
+        const apt = data.calling[0];
+        currentCallingEl.innerHTML = `
+            <div class="ws-calling-item">
+                <div class="ws-calling-number">${String(apt.queue_number || '').padStart(3, '0')}</div>
+                <div class="ws-calling-info">
+                    <div class="ws-calling-name">${escapeHtml(apt.user_name)}</div>
+                    <div class="ws-calling-item-name">${escapeHtml(apt.item_name || '')}</div>
+                    <div class="ws-calling-time">${apt.time_slot} 时段</div>
+                </div>
+            </div>
+        `;
+        btnSkip.disabled = false;
+        btnComplete.disabled = false;
+        btnCallNext.disabled = true;
+    } else {
+        currentCallingEl.innerHTML = `
+            <div class="ws-no-calling">
+                <div class="ws-no-calling-icon">⏸</div>
+                <div class="ws-no-calling-text">暂无叫号</div>
+            </div>
+        `;
+        btnSkip.disabled = true;
+        btnComplete.disabled = true;
+        btnCallNext.disabled = data.waiting_count === 0;
+    }
+
+    const queueListEl = document.getElementById('wsQueueList');
+    if (data.waiting.length === 0) {
+        queueListEl.innerHTML = `
+            <div class="empty-state-sm">
+                <span>暂无等待的预约</span>
+            </div>
+        `;
+    } else {
+        queueListEl.innerHTML = data.waiting.map((apt, index) => `
+            <div class="ws-queue-item ${index < 3 ? 'priority' : ''}">
+                <div class="ws-queue-num">${String(apt.queue_number || '').padStart(3, '0')}</div>
+                <div class="ws-queue-info">
+                    <div class="ws-queue-name">${escapeHtml(apt.user_name)}</div>
+                    <div class="ws-queue-item-name">${escapeHtml(apt.item_name || '')}</div>
+                    <div class="ws-queue-time">${apt.time_slot}</div>
+                </div>
+                <div class="ws-queue-order">${index + 1}</div>
+            </div>
+        `).join('');
+    }
+}
+
+function startWorkstationAutoRefresh() {
+    stopWorkstationAutoRefresh();
+    state.workstation.refreshTimer = setInterval(() => {
+        if (state.currentTab === 'window-workstation' && state.workstation.selectedWindowId) {
+            loadWindowQueue();
+        }
+    }, 5000);
+}
+
+function stopWorkstationAutoRefresh() {
+    if (state.workstation.refreshTimer) {
+        clearInterval(state.workstation.refreshTimer);
+        state.workstation.refreshTimer = null;
+    }
+}
+
+async function wsCallNext() {
+    if (!state.workstation.selectedWindowId) return;
+
+    try {
+        const res = await fetch(`${API_BASE}/windows/${state.workstation.selectedWindowId}/call-next`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
+
+        const data = await res.json();
+        if (!res.ok) {
+            throw new Error(data.error || '叫号失败');
+        }
+
+        showToast(data.message, 'success');
+        loadWindowQueue();
+    } catch (e) {
+        showToast(e.message, 'error');
+    }
+}
+
+async function wsComplete() {
+    if (!state.workstation.selectedWindowId) return;
+
+    showConfirm('确认完成', '确定将当前叫号标记为已办理？', async () => {
+        try {
+            const res = await fetch(`${API_BASE}/windows/${state.workstation.selectedWindowId}/complete`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' }
+            });
+
+            const data = await res.json();
+            if (!res.ok) {
+                throw new Error(data.error || '操作失败');
+            }
+
+            showToast(data.message, 'success');
+            loadWindowQueue();
+        } catch (e) {
+            showToast(e.message, 'error');
+        }
+    });
+}
+
+async function wsSkip() {
+    if (!state.workstation.selectedWindowId) return;
+
+    showConfirm('跳过当前', '确定跳过当前叫号？当前号将回到等待队列，叫下一位。', async () => {
+        try {
+            const res = await fetch(`${API_BASE}/windows/${state.workstation.selectedWindowId}/skip`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' }
+            });
+
+            const data = await res.json();
+            if (!res.ok) {
+                throw new Error(data.error || '操作失败');
+            }
+
+            showToast(data.message, 'success');
+            loadWindowQueue();
+        } catch (e) {
+            showToast(e.message, 'error');
+        }
+    });
+}
+
 function openSlotModal(itemId, itemName) {
     const today = formatDate(new Date());
     state.slotModalData = { itemId, itemName, date: today, useWindows: false, useTimeSlots: false, windowSlots: [], mode: 'total' };
@@ -2414,5 +2627,8 @@ window.goToReschedulePage = goToReschedulePage;
 window.editWindow = editWindow;
 window.deleteWindow = deleteWindow;
 window.toggleWindowStatus = toggleWindowStatus;
+window.wsCallNext = wsCallNext;
+window.wsComplete = wsComplete;
+window.wsSkip = wsSkip;
 
 document.addEventListener('DOMContentLoaded', init);

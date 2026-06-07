@@ -30,6 +30,10 @@
                     <span class="nav-icon">🎉</span>
                     <span>节假日管理</span>
                 </div>
+                <div class="nav-item" data-tab="window-workstation">
+                    <span class="nav-icon">🖥️</span>
+                    <span>窗口工作台</span>
+                </div>
                 <div class="nav-item" data-tab="windows">
                     <span class="nav-icon">🪟</span>
                     <span>窗口管理</span>
@@ -252,6 +256,70 @@
                                 <tr><td colspan="4" class="loading">加载中...</td></tr>
                             </tbody>
                         </table>
+                    </div>
+                </div>
+
+                <div class="tab-content" id="tab-window-workstation">
+                    <div class="page-header">
+                        <h3>窗口工作台</h3>
+                        <div>
+                            <select id="workstationWindowSelect" class="form-select">
+                                <option value="">请选择窗口</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div id="workstationContent" style="display:none;">
+                        <div class="workstation-stats">
+                            <div class="ws-stat-card ws-stat-calling">
+                                <div class="ws-stat-label">正在叫号</div>
+                                <div class="ws-stat-value" id="wsStatCalling">0</div>
+                            </div>
+                            <div class="ws-stat-card ws-stat-waiting">
+                                <div class="ws-stat-label">等待人数</div>
+                                <div class="ws-stat-value" id="wsStatWaiting">0</div>
+                            </div>
+                            <div class="ws-stat-card ws-stat-completed">
+                                <div class="ws-stat-label">已完成</div>
+                                <div class="ws-stat-value" id="wsStatCompleted">0</div>
+                            </div>
+                            <div class="ws-stat-card ws-stat-total">
+                                <div class="ws-stat-label">今日总号</div>
+                                <div class="ws-stat-value" id="wsStatTotal">0</div>
+                            </div>
+                        </div>
+
+                        <div class="workstation-main">
+                            <div class="ws-current-section">
+                                <h4>🔔 当前叫号</h4>
+                                <div id="wsCurrentCalling" class="ws-current-card">
+                                    <div class="ws-no-calling">
+                                        <div class="ws-no-calling-icon">⏸</div>
+                                        <div class="ws-no-calling-text">暂无叫号</div>
+                                    </div>
+                                </div>
+                                <div class="ws-action-buttons">
+                                    <button class="btn btn-lg btn-success" id="wsBtnCallNext" onclick="wsCallNext()">
+                                        📢 叫下一号
+                                    </button>
+                                    <button class="btn btn-lg btn-warning" id="wsBtnSkip" onclick="wsSkip()" disabled>
+                                        ⏭️ 跳过当前
+                                    </button>
+                                    <button class="btn btn-lg btn-primary" id="wsBtnComplete" onclick="wsComplete()" disabled>
+                                        ✅ 完成办理
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div class="ws-queue-section">
+                                <h4>📋 等待队列</h4>
+                                <div class="ws-queue-list" id="wsQueueList">
+                                    <div class="empty-state-sm">
+                                        <span>暂无等待的预约</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
 

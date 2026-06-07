@@ -689,6 +689,12 @@ body {
     gap: 6px;
 }
 
+.footer-actions {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+}
+
 .footer-actions .btn-refresh {
     background: rgba(255, 255, 255, 0.15);
     color: #fff;
@@ -925,4 +931,159 @@ body {
     margin: 10px 0;
     font-weight: bold;
     text-shadow: 0 0 20px rgba(255, 215, 0, 0.5);
+}
+
+.view-toggle {
+    display: flex;
+    gap: 0;
+    border-radius: 8px;
+    overflow: hidden;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+}
+
+.btn-view {
+    padding: 8px 20px;
+    background: rgba(255, 255, 255, 0.1);
+    border: none;
+    color: rgba(255, 255, 255, 0.7);
+    font-size: 14px;
+    cursor: pointer;
+    transition: all 0.3s;
+    font-family: inherit;
+}
+
+.btn-view:hover {
+    background: rgba(255, 255, 255, 0.2);
+    color: white;
+}
+
+.btn-view.active {
+    background: #ffd700;
+    color: #1a3a5c;
+    font-weight: 600;
+}
+
+.windows-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 20px;
+}
+
+.window-card {
+    background: rgba(255, 255, 255, 0.08);
+    backdrop-filter: blur(10px);
+    border-radius: 16px;
+    overflow: hidden;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    transition: all 0.3s ease;
+}
+
+.window-card:hover {
+    transform: translateY(-3px);
+    background: rgba(255, 255, 255, 0.12);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+}
+
+.window-card.has-calling {
+    border-color: rgba(255, 107, 107, 0.5);
+    box-shadow: 0 0 20px rgba(255, 107, 107, 0.2);
+}
+
+.window-card-header {
+    padding: 20px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.window-name {
+    font-size: 20px;
+    font-weight: 600;
+    color: #fff;
+}
+
+.window-counts {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.window-card-body {
+    padding: 20px;
+}
+
+.window-card .calling-section {
+    margin-bottom: 16px;
+}
+
+.window-card .calling-item {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 16px;
+    background: rgba(255, 107, 107, 0.15);
+    border-radius: 12px;
+    border: 1px solid rgba(255, 107, 107, 0.3);
+}
+
+.window-card .calling-number-big {
+    font-size: 42px;
+    font-weight: bold;
+    color: #ff6b6b;
+    font-family: 'Courier New', monospace;
+    text-shadow: 0 0 10px rgba(255, 107, 107, 0.5);
+}
+
+.window-card .calling-info {
+    flex: 1;
+}
+
+.window-card .calling-name {
+    font-size: 18px;
+    font-weight: 600;
+    color: #fff;
+    margin-bottom: 4px;
+}
+
+.window-card .calling-time {
+    font-size: 13px;
+    color: rgba(255, 255, 255, 0.6);
+    margin-bottom: 2px;
+}
+
+.calling-item-name {
+    font-size: 13px;
+    color: rgba(255, 255, 255, 0.6);
+}
+
+.waiting-mini-list {
+    padding: 12px;
+    background: rgba(78, 205, 196, 0.1);
+    border-radius: 8px;
+    text-align: center;
+}
+
+.waiting-hint {
+    font-size: 14px;
+    color: #4ecdc4;
+    font-weight: 500;
+}
+
+@media (max-width: 768px) {
+    .windows-grid {
+        grid-template-columns: 1fr;
+    }
+    
+    .view-toggle {
+        margin-right: 0;
+        margin-bottom: 10px;
+    }
+    
+    .footer-actions {
+        flex-direction: column;
+        align-items: flex-end;
+    }
 }
