@@ -2478,16 +2478,21 @@ app.post('/api/appointments/:id/reschedule', (req, res) => {
     return res.status(400).json({ error: '只有待办理状态的预约才能改期' });
   }
 
-  const oldDateObj = new Date(appointment.appointment_date);
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  if (oldDateObj < today) {
+  function getLocalDateStr(d) {
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+  
+  const todayStr = getLocalDateStr(new Date());
+  
+  if (appointment.appointment_date < todayStr) {
     return res.status(400).json({ error: '已过期的预约不能改期' });
   }
-
-  const newDateObj = new Date(new_date);
-  if (newDateObj < today) {
-    return res.status(400).json({ error: '不能改期到过去的日期' });
+  
+  if (new_date <= todayStr) {
+    return res.status(400).json({ error: '只能改期到未来的工作日' });
   }
 
   if (!isWorkday(new_date)) {

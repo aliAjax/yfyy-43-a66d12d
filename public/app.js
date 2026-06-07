@@ -969,14 +969,14 @@ function renderRescheduleDateGrid() {
     const container = document.getElementById('rescheduleDateGrid');
     container.innerHTML = dates.map(date => {
         const dateStr = formatDate(date);
-        const isPast = date < today;
+        const isPastOrToday = date <= today;
         const isWeekend = date.getDay() === 0 || date.getDay() === 6;
         const isToday = formatDate(date) === formatDate(today);
         const isSelected = state.reschedule.selectedDate === dateStr;
         const isSameAsOld = state.currentAppointment && dateStr === state.currentAppointment.appointment_date;
 
         let classes = 'date-item';
-        if (isPast) classes += ' disabled';
+        if (isPastOrToday) classes += ' disabled';
         if (isWeekend) classes += ' disabled';
         if (isToday) classes += ' today';
         if (isSelected) classes += ' selected';
@@ -1001,8 +1001,17 @@ function renderRescheduleDateGrid() {
     });
 
     if (state.reschedule.selectedDate) {
+        const selectedDateObj = new Date(state.reschedule.selectedDate);
+        if (selectedDateObj <= today) {
+            state.reschedule.selectedDate = null;
+            state.reschedule.selectedTimeSlot = null;
+        }
+    }
+
+    if (state.reschedule.selectedDate) {
         loadRescheduleTimeSlots();
     }
+    updateRescheduleConfirmBtn();
 }
 
 async function loadRescheduleTimeSlots() {
