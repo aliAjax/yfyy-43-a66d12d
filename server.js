@@ -3285,25 +3285,50 @@ app.post('/api/windows/:windowId/call-next', (req, res) => {
     return res.status(400).json({ error: '该窗口已有正在叫号的预约，请先完成或跳过' });
   }
 
-  const nextApt = db.prepare(`
+  const waitingApts = db.prepare(`
     SELECT a.*, i.name as item_name
     FROM appointments a
     LEFT JOIN items i ON a.item_id = i.id
     WHERE a.window_id = ? AND a.appointment_date = ? AND a.status = ?
     ORDER BY a.queue_number ASC
-    LIMIT 1
-  `).get(windowId, today, 'arrived');
+  `).all(windowId, today, 'arrived');
 
-  if (!nextApt) {
+  if (waitingApts.length === 0) {
     return res.json({ success: true, has_next: false, message: '暂无等待叫号的预约' });
   }
 
+  let nextApt = null;
+  for (const apt of waitingApts) {
+    const itemCalling = db.prepare(
+      'SELECT id FROM appointments WHERE item_id = ? AND appointment_date = ? AND status = ?'
+    ).get(apt.item_id, today, 'calling');
+    if (!itemCalling) {
+      nextApt = apt;
+      break;
+    }
+  }
+
+  if (!nextApt) {
+    return res.json({ 
+      success: true, 
+      has_next: false, 
+      message: '等待队列中的预约所属事项均正在叫号，请稍后再试' 
+    });
+  }
+
   const tx = db.transaction(() => {
-    const recheck = db.prepare(
+    const recheckWindow = db.prepare(
       'SELECT id FROM appointments WHERE window_id = ? AND appointment_date = ? AND status = ?'
     ).get(windowId, today, 'calling');
-    if (recheck) {
+    if (recheckWindow) {
       throw new Error('该窗口已有正在叫号的预约');
+    }
+
+    const recheckItem = db.prepare(
+      'SELECT id FROM appointments WHERE item_id = ? AND appointment_date = ? AND status = ?'
+    ).get(nextApt.item_id, today, 'calling');
+    if (recheckItem) {
+      throw new Error('该事项已有正在叫号的预约');
     }
 
     db.prepare('UPDATE appointments SET status = ?, called_at = CURRENT_TIMESTAMP WHERE id = ?').run('calling', nextApt.id);
@@ -3323,7 +3348,7 @@ app.post('/api/windows/:windowId/call-next', (req, res) => {
     tx();
     res.json({ success: true, has_next: true, appointment: nextApt, message: '叫号成功' });
   } catch (e) {
-    if (e.message === '该窗口已有正在叫号的预约') {
+    if (e.message === '该窗口已有正在叫号的预约' || e.message === '该事项已有正在叫号的预约') {
       res.status(400).json({ error: e.message });
     } else {
       res.status(500).json({ error: '叫号失败' });
@@ -3385,14 +3410,24 @@ app.post('/api/windows/:windowId/skip', (req, res) => {
   const tx = db.transaction(() => {
     db.prepare('UPDATE appointments SET status = ? WHERE id = ?').run('arrived', currentApt.id);
 
-    const nextApt = db.prepare(`
+    const waitingApts = db.prepare(`
       SELECT a.*, i.name as item_name
       FROM appointments a
       LEFT JOIN items i ON a.item_id = i.id
       WHERE a.window_id = ? AND a.appointment_date = ? AND a.status = ? AND a.id != ?
       ORDER BY a.queue_number ASC
-      LIMIT 1
-    `).get(windowId, today, 'arrived', currentApt.id);
+    `).all(windowId, today, 'arrived', currentApt.id);
+
+    let nextApt = null;
+    for (const apt of waitingApts) {
+      const itemCalling = db.prepare(
+        'SELECT id FROM appointments WHERE item_id = ? AND appointment_date = ? AND status = ?'
+      ).get(apt.item_id, today, 'calling');
+      if (!itemCalling) {
+        nextApt = apt;
+        break;
+      }
+    }
 
     if (nextApt) {
       db.prepare('UPDATE appointments SET status = ?, called_at = CURRENT_TIMESTAMP WHERE id = ?').run('calling', nextApt.id);
@@ -3418,7 +3453,7 @@ app.post('/api/windows/:windowId/skip', (req, res) => {
       has_next: result.has_next,
       next_appointment: result.next,
       skipped_appointment: result.skipped,
-      message: result.has_next ? '已跳过，叫下一位' : '已跳过，暂无下一位'
+      message: result.has_next ? '已跳过，叫下一位' : '已跳过，暂无下一位（其他事项均在叫号中）'
     });
   } catch (e) {
     res.status(500).json({ error: '操作失败' });
