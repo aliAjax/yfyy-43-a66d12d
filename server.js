@@ -176,6 +176,15 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_reschedules_item ON appointment_reschedules(item_id);
   CREATE INDEX IF NOT EXISTS idx_reschedules_created ON appointment_reschedules(created_at);
   CREATE INDEX IF NOT EXISTS idx_time_slots_item_date ON time_slot_capacities(item_id, date);
+
+  CREATE TABLE IF NOT EXISTS system_settings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    setting_key TEXT NOT NULL UNIQUE,
+    setting_value TEXT,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_settings_key ON system_settings(setting_key);
 `);
 
 const columns = db.prepare("PRAGMA table_info(items)").all();
@@ -227,6 +236,59 @@ const hasMaxActiveAppointments = itemColumns.some(c => c.name === 'max_active_ap
 if (!hasMaxActiveAppointments) {
   db.exec('ALTER TABLE items ADD COLUMN max_active_appointments INTEGER');
 }
+
+const restrictionColumns = db.prepare("PRAGMA table_info(phone_restrictions)").all();
+const hasIsAuto = restrictionColumns.some(c => c.name === 'is_auto');
+if (!hasIsAuto) {
+  db.exec("ALTER TABLE phone_restrictions ADD COLUMN is_auto INTEGER NOT NULL DEFAULT 0");
+}
+const hasNoShowCount = restrictionColumns.some(c => c.name === 'no_show_count');
+if (!hasNoShowCount) {
+  db.exec('ALTER TABLE phone_restrictions ADD COLUMN no_show_count INTEGER');
+}
+const hasRestrictionType = restrictionColumns.some(c => c.name === 'restriction_type');
+if (!hasRestrictionType) {
+  db.exec("ALTER TABLE phone_restrictions ADD COLUMN restriction_type TEXT NOT NULL DEFAULT 'manual'");
+}
+
+const aptMoreColumns = db.prepare("PRAGMA table_info(appointments)").all();
+const hasNoShowAt = aptMoreColumns.some(c => c.name === 'no_show_at');
+if (!hasNoShowAt) {
+  db.exec('ALTER TABLE appointments ADD COLUMN no_show_at DATETIME');
+}
+
+function getSystemSetting(key, defaultValue = null) {
+  const row = db.prepare('SELECT setting_value FROM system_settings WHERE setting_key = ?').get(key);
+  return row ? row.setting_value : defaultValue;
+}
+
+function setSystemSetting(key, value) {
+  db.prepare(`
+    INSERT INTO system_settings (setting_key, setting_value, updated_at)
+    VALUES (?, ?, CURRENT_TIMESTAMP)
+    ON CONFLICT(setting_key) DO UPDATE SET
+      setting_value = excluded.setting_value,
+      updated_at = CURRENT_TIMESTAMP
+  `).run(key, value);
+}
+
+function initSystemSettings() {
+  const settings = [
+    { key: 'no_show_threshold', value: '3' },
+    { key: 'no_show_restriction_days', value: '30' },
+    { key: 'no_show_window_days', value: '30' }
+  ];
+
+  for (const s of settings) {
+    const existing = getSystemSetting(s.key);
+    if (existing === null || existing === undefined) {
+      setSystemSetting(s.key, s.value);
+    }
+  }
+  console.log('已初始化系统设置');
+}
+
+initSystemSettings();
 
 db.prepare("UPDATE appointment_reminders SET send_status = 'simulated' WHERE send_status = 'sent'").run();
 
@@ -308,7 +370,8 @@ function generateReminderContent(type, appointment) {
     cancelled: `【预约取消】您的${appointment.item_name || '业务'}预约已取消，预约日期：${appointment.appointment_date} ${appointment.time_slot}。`,
     arrived: `【到场提醒】您的${appointment.item_name || '业务'}预约已签到，请在休息区等待叫号。`,
     calling: `【叫号提醒】请${appointment.user_name || ''}顾客前往${appointment.window_name || appointment.item_name || '业务'}窗口办理，您的号码是${appointment.queue_number || ''}号。`,
-    completed: `【办理完成】您的${appointment.item_name || '业务'}已办理完成，感谢您的配合。`
+    completed: `【办理完成】您的${appointment.item_name || '业务'}已办理完成，感谢您的配合。`,
+    no_show: `【爽约提醒】您的${appointment.item_name || '业务'}预约（${appointment.appointment_date} ${appointment.time_slot}）已被标记为爽约，请按时前往办理，多次爽约将被限制预约。`
   };
   return templates[type] || '';
 }
@@ -1676,7 +1739,7 @@ app.put('/api/appointments/:id/status', (req, res) => {
   const { id } = req.params;
   const { status } = req.body;
 
-  const validStatuses = ['pending', 'arrived', 'calling', 'completed', 'cancelled'];
+  const validStatuses = ['pending', 'arrived', 'calling', 'completed', 'cancelled', 'no_show'];
   if (!validStatuses.includes(status)) {
     return res.status(400).json({ error: '无效的状态' });
   }
@@ -1703,11 +1766,17 @@ app.put('/api/appointments/:id/status', (req, res) => {
       return res.status(400).json({ error: '该事项已有正在叫号的预约，请先完成或取消' });
     }
     db.prepare('UPDATE appointments SET status = ?, called_at = CURRENT_TIMESTAMP WHERE id = ?').run(status, id);
+  } else if (status === 'no_show') {
+    if (oldStatus !== 'pending' && oldStatus !== 'arrived') {
+      return res.status(400).json({ error: '只有待办理或已到场状态的预约才能标记为爽约' });
+    }
+    db.prepare("UPDATE appointments SET status = 'no_show', no_show_at = CURRENT_TIMESTAMP WHERE id = ?").run(id);
   } else {
     db.prepare('UPDATE appointments SET status = ? WHERE id = ?').run(status, id);
   }
 
-  if (status === 'cancelled' && oldStatus !== 'cancelled') {
+  const releaseStatuses = ['cancelled', 'no_show'];
+  if (releaseStatuses.includes(status) && !releaseStatuses.includes(oldStatus)) {
     const timeSlotCap = db.prepare(`
       SELECT * FROM time_slot_capacities 
       WHERE item_id = ? AND date = ?
@@ -1737,7 +1806,8 @@ app.put('/api/appointments/:id/status', (req, res) => {
     }
   }
 
-  if (oldStatus === 'cancelled' && status !== 'cancelled') {
+  const restoreStatuses = ['cancelled', 'no_show'];
+  if (restoreStatuses.includes(oldStatus) && !restoreStatuses.includes(status)) {
     const timeSlotCap = db.prepare(`
       SELECT * FROM time_slot_capacities 
       WHERE item_id = ? AND date = ?
@@ -1798,7 +1868,7 @@ app.put('/api/appointments/:id/status', (req, res) => {
     }
   }
 
-  const reminderTypes = ['arrived', 'calling', 'completed', 'cancelled'];
+  const reminderTypes = ['arrived', 'calling', 'completed', 'cancelled', 'no_show'];
   if (reminderTypes.includes(status) && oldStatus !== status) {
     const item = db.prepare('SELECT name FROM items WHERE id = ?').get(appointment.item_id);
     const window = appointment.window_id ?
@@ -1814,7 +1884,241 @@ app.put('/api/appointments/:id/status', (req, res) => {
     createReminder(appointment.id, appointment.phone, status, reminderContent);
   }
 
-  res.json({ success: true, status });
+  let noShowCount = null;
+  let autoRestriction = null;
+  let restrictionRemoved = false;
+  if (status === 'no_show' && oldStatus !== 'no_show') {
+    noShowCount = getNoShowCount(appointment.phone);
+    autoRestriction = checkAndAddAutoRestriction(appointment.phone, noShowCount);
+  } else if (oldStatus === 'no_show' && status !== 'no_show') {
+    noShowCount = getNoShowCount(appointment.phone);
+    const threshold = parseInt(getSystemSetting('no_show_threshold', '3'), 10) || 3;
+    if (noShowCount < threshold) {
+      const result = db.prepare(
+        "DELETE FROM phone_restrictions WHERE phone = ? AND is_auto = 1 AND restriction_type = 'no_show'"
+      ).run(appointment.phone);
+      restrictionRemoved = result.changes > 0;
+    }
+  }
+
+  res.json({ 
+    success: true, 
+    status,
+    no_show_count: noShowCount,
+    auto_restriction: autoRestriction,
+    restriction_removed: restrictionRemoved
+  });
+});
+
+function getNoShowCount(phone) {
+  const windowDays = parseInt(getSystemSetting('no_show_window_days', '30'), 10) || 30;
+  
+  const date = new Date();
+  date.setDate(date.getDate() - windowDays);
+  const startDate = date.toISOString().split('T')[0];
+
+  const row = db.prepare(`
+    SELECT COUNT(*) as count 
+    FROM appointments 
+    WHERE phone = ? AND status = 'no_show' AND appointment_date >= ?
+  `).get(phone, startDate);
+
+  return row ? row.count : 0;
+}
+
+function checkAndAddAutoRestriction(phone, noShowCount) {
+  const threshold = parseInt(getSystemSetting('no_show_threshold', '3'), 10) || 3;
+  const restrictionDays = parseInt(getSystemSetting('no_show_restriction_days', '30'), 10) || 30;
+
+  if (noShowCount < threshold) {
+    return { added: false, reason: '未达到阈值' };
+  }
+
+  const existing = db.prepare('SELECT * FROM phone_restrictions WHERE phone = ?').get(phone);
+  if (existing) {
+    return { added: false, reason: '已在限制名单中', existing: true };
+  }
+
+  const endDate = new Date();
+  endDate.setDate(endDate.getDate() + restrictionDays);
+  const endDateStr = endDate.toISOString().split('T')[0];
+
+  const reason = `近30天内爽约${noShowCount}次，自动限制预约${restrictionDays}天`;
+
+  const result = db.prepare(`
+    INSERT INTO phone_restrictions (phone, reason, end_date, is_auto, no_show_count, restriction_type)
+    VALUES (?, ?, ?, 1, ?, 'no_show')
+  `).run(phone, reason, endDateStr, noShowCount);
+
+  return {
+    added: true,
+    id: result.lastInsertRowid,
+    phone,
+    reason,
+    end_date: endDateStr,
+    no_show_count: noShowCount
+  };
+}
+
+app.post('/api/appointments/:id/no-show', (req, res) => {
+  const { id } = req.params;
+
+  const appointment = db.prepare('SELECT * FROM appointments WHERE id = ?').get(id);
+  if (!appointment) {
+    return res.status(404).json({ error: '预约不存在' });
+  }
+
+  const oldStatus = appointment.status;
+
+  if (oldStatus === 'no_show') {
+    return res.status(400).json({ error: '该预约已标记为爽约' });
+  }
+
+  if (oldStatus !== 'pending' && oldStatus !== 'arrived') {
+    return res.status(400).json({ error: '只有待办理或已到场状态的预约才能标记为爽约' });
+  }
+
+  db.prepare("UPDATE appointments SET status = 'no_show', no_show_at = CURRENT_TIMESTAMP WHERE id = ?").run(id);
+
+  const timeSlotCap = db.prepare(`
+    SELECT * FROM time_slot_capacities 
+    WHERE item_id = ? AND date = ?
+  `).all(appointment.item_id, appointment.appointment_date);
+
+  const hasTimeSlots = timeSlotCap.length > 0;
+
+  if (hasTimeSlots) {
+    const matched = timeSlotCap.find(ts => 
+      appointment.time_slot === `${ts.start_time}-${ts.end_time}`
+    );
+    if (matched) {
+      db.prepare(
+        'UPDATE time_slot_capacities SET current_count = current_count - 1 WHERE id = ?'
+      ).run(matched.id);
+    }
+  }
+
+  if (appointment.window_id) {
+    db.prepare(
+      'UPDATE window_slots SET current_count = current_count - 1 WHERE window_id = ? AND item_id = ? AND date = ?'
+    ).run(appointment.window_id, appointment.item_id, appointment.appointment_date);
+  } else if (!hasTimeSlots) {
+    db.prepare(
+      'UPDATE daily_slots SET current_count = current_count - 1 WHERE item_id = ? AND date = ?'
+    ).run(appointment.item_id, appointment.appointment_date);
+  }
+
+  const item = db.prepare('SELECT name FROM items WHERE id = ?').get(appointment.item_id);
+  const window = appointment.window_id ?
+    db.prepare('SELECT name FROM windows WHERE id = ?').get(appointment.window_id) : null;
+  const reminderContent = generateReminderContent('no_show', {
+    item_name: item ? item.name : '',
+    window_name: window ? window.name : '',
+    appointment_date: appointment.appointment_date,
+    time_slot: appointment.time_slot
+  });
+  createReminder(appointment.id, appointment.phone, 'no_show', reminderContent);
+
+  const noShowCount = getNoShowCount(appointment.phone);
+  const autoRestriction = checkAndAddAutoRestriction(appointment.phone, noShowCount);
+
+  res.json({
+    success: true,
+    status: 'no_show',
+    no_show_count: noShowCount,
+    auto_restriction: autoRestriction
+  });
+});
+
+app.put('/api/appointments/:id/no-show/revert', (req, res) => {
+  const { id } = req.params;
+
+  const appointment = db.prepare('SELECT * FROM appointments WHERE id = ?').get(id);
+  if (!appointment) {
+    return res.status(404).json({ error: '预约不存在' });
+  }
+
+  if (appointment.status !== 'no_show') {
+    return res.status(400).json({ error: '该预约不是爽约状态' });
+  }
+
+  const timeSlotCap = db.prepare(`
+    SELECT * FROM time_slot_capacities 
+    WHERE item_id = ? AND date = ?
+  `).all(appointment.item_id, appointment.appointment_date);
+
+  const hasTimeSlots = timeSlotCap.length > 0;
+  let canRestore = true;
+
+  if (hasTimeSlots) {
+    const matched = timeSlotCap.find(ts => 
+      appointment.time_slot === `${ts.start_time}-${ts.end_time}`
+    );
+    if (matched) {
+      if (matched.current_count >= matched.max_count) {
+        canRestore = false;
+      }
+    }
+  }
+
+  if (appointment.window_id) {
+    const slot = db.prepare(
+      'SELECT * FROM window_slots WHERE window_id = ? AND item_id = ? AND date = ?'
+    ).get(appointment.window_id, appointment.item_id, appointment.appointment_date);
+    if (slot && slot.current_count >= slot.max_count) {
+      canRestore = false;
+    }
+  } else if (!hasTimeSlots) {
+    const slot = db.prepare('SELECT * FROM daily_slots WHERE item_id = ? AND date = ?').get(appointment.item_id, appointment.appointment_date);
+    if (slot && slot.current_count >= slot.max_count) {
+      canRestore = false;
+    }
+  }
+
+  if (!canRestore) {
+    return res.status(400).json({ error: '号源已满，无法恢复预约' });
+  }
+
+  db.prepare("UPDATE appointments SET status = 'pending', no_show_at = NULL WHERE id = ?").run(id);
+
+  if (hasTimeSlots) {
+    const matched = timeSlotCap.find(ts => 
+      appointment.time_slot === `${ts.start_time}-${ts.end_time}`
+    );
+    if (matched) {
+      db.prepare(
+        'UPDATE time_slot_capacities SET current_count = current_count + 1 WHERE id = ?'
+      ).run(matched.id);
+    }
+  }
+
+  if (appointment.window_id) {
+    db.prepare(
+      'UPDATE window_slots SET current_count = current_count + 1 WHERE window_id = ? AND item_id = ? AND date = ?'
+    ).run(appointment.window_id, appointment.item_id, appointment.appointment_date);
+  } else if (!hasTimeSlots) {
+    db.prepare(
+      'UPDATE daily_slots SET current_count = current_count + 1 WHERE item_id = ? AND date = ?'
+    ).run(appointment.item_id, appointment.appointment_date);
+  }
+
+  const noShowCount = getNoShowCount(appointment.phone);
+
+  const threshold = parseInt(getSystemSetting('no_show_threshold', '3'), 10) || 3;
+  let restrictionRemoved = false;
+  if (noShowCount < threshold) {
+    const result = db.prepare(
+      "DELETE FROM phone_restrictions WHERE phone = ? AND is_auto = 1 AND restriction_type = 'no_show'"
+    ).run(appointment.phone);
+    restrictionRemoved = result.changes > 0;
+  }
+
+  res.json({
+    success: true,
+    status: 'pending',
+    no_show_count: noShowCount,
+    restriction_removed: restrictionRemoved
+  });
 });
 
 function parseSlotMaxCount(value) {
@@ -2824,6 +3128,75 @@ app.delete('/api/phone-restrictions/:id', (req, res) => {
 
   db.prepare('DELETE FROM phone_restrictions WHERE id = ?').run(id);
   res.json({ success: true });
+});
+
+app.get('/api/system-settings', (req, res) => {
+  const settings = db.prepare('SELECT * FROM system_settings').all();
+  const result = {};
+  for (const s of settings) {
+    result[s.setting_key] = s.setting_value;
+  }
+  res.json(result);
+});
+
+app.put('/api/system-settings', (req, res) => {
+  const settings = req.body;
+
+  if (!settings || typeof settings !== 'object') {
+    return res.status(400).json({ error: '设置数据无效' });
+  }
+
+  const validKeys = ['no_show_threshold', 'no_show_restriction_days', 'no_show_window_days'];
+
+  for (const key of validKeys) {
+    if (settings[key] !== undefined && settings[key] !== null) {
+      const value = String(settings[key]);
+      if (key.endsWith('_days') || key.endsWith('_threshold')) {
+        const num = parseInt(value, 10);
+        if (isNaN(num) || num <= 0) {
+          return res.status(400).json({ error: `${key} 必须是正整数` });
+        }
+      }
+      setSystemSetting(key, value);
+    }
+  }
+
+  const updatedSettings = {};
+  for (const key of validKeys) {
+    updatedSettings[key] = getSystemSetting(key);
+  }
+
+  res.json(updatedSettings);
+});
+
+app.get('/api/appointments/no-show-stats', (req, res) => {
+  const { phone } = req.query;
+
+  if (!phone) {
+    return res.status(400).json({ error: '请提供手机号' });
+  }
+
+  const count = getNoShowCount(phone);
+  const threshold = parseInt(getSystemSetting('no_show_threshold', '3'), 10) || 3;
+  const windowDays = parseInt(getSystemSetting('no_show_window_days', '30'), 10) || 30;
+
+  const restriction = db.prepare(
+    'SELECT * FROM phone_restrictions WHERE phone = ? ORDER BY created_at DESC LIMIT 1'
+  ).get(phone);
+
+  const todayStr = getTodayStr();
+
+  res.json({
+    phone,
+    no_show_count: count,
+    threshold,
+    window_days: windowDays,
+    is_restricted: restriction && restriction.end_date >= todayStr,
+    restriction: restriction ? {
+      ...restriction,
+      is_active: restriction.end_date >= todayStr
+    } : null
+  });
 });
 
 app.post('/api/appointments/:id/reschedule', (req, res) => {

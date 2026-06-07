@@ -412,6 +412,11 @@ body {
     color: #ff4d4f;
 }
 
+.status-no_show {
+    background: #fff0f6;
+    color: #eb2f96;
+}
+
 .action-buttons {
     display: flex;
     gap: 4px;
@@ -1466,4 +1471,41 @@ body {
     .workstation-main {
         grid-template-columns: 1fr;
     }
+}
+
+.settings-section {
+    background: white;
+    border-radius: 12px;
+    padding: 24px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+    margin-bottom: 20px;
+}
+
+.settings-section h4 {
+    margin: 0 0 20px 0;
+    font-size: 16px;
+    color: #333;
+    font-weight: 600;
+    padding-bottom: 12px;
+    border-bottom: 1px solid #f0f0f0;
+}
+
+.settings-form {
+    max-width: 400px;
+}
+
+.settings-form .form-actions {
+    margin-top: 24px;
+    padding-top: 16px;
+    border-top: 1px solid #f0f0f0;
+}
+
+.btn-warning {
+    background: #fa8c16;
+    color: white;
+    border: none;
+}
+
+.btn-warning:hover {
+    background: #d47800;
 }

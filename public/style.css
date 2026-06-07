@@ -932,6 +932,10 @@ h2 {
     background: #a0aec0;
 }
 
+.status-no_show {
+    background: #ed64a6;
+}
+
 .detail-body {
     padding: 8px 0;
 }
@@ -972,6 +976,12 @@ h2 {
 .detail-tip-muted {
     background: #f7fafc;
     color: #718096;
+}
+
+.detail-tip-warning {
+    background: #fffaf0;
+    color: #c05621;
+    border-left: 3px solid #ed8936;
 }
 
 .query-actions {

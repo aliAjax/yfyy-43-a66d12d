@@ -656,7 +656,8 @@ function getStatusText(status) {
         'pending': '待办理',
         'arrived': '已签到',
         'completed': '已完成',
-        'cancelled': '已取消'
+        'cancelled': '已取消',
+        'no_show': '已爽约'
     };
     return statusMap[status] || status;
 }
@@ -666,7 +667,8 @@ function getStatusClass(status) {
         'pending': 'status-pending',
         'arrived': 'status-arrived',
         'completed': 'status-completed',
-        'cancelled': 'status-cancelled'
+        'cancelled': 'status-cancelled',
+        'no_show': 'status-no_show'
     };
     return classMap[status] || '';
 }
@@ -866,6 +868,7 @@ function renderAppointmentDetail(appointment, materials = []) {
         ${appointment.status === 'cancelled' ? '<div class="detail-tip detail-tip-muted">该预约已取消，号源已释放</div>' : ''}
         ${appointment.status === 'completed' && !state.currentReview ? '<div class="detail-tip">⭐ 您已完成办理，点击下方按钮进行满意度评价</div>' : ''}
         ${appointment.status === 'arrived' ? '<div class="detail-tip detail-tip-muted">该预约已签到，请到窗口办理</div>' : ''}
+        ${appointment.status === 'no_show' ? '<div class="detail-tip detail-tip-warning">⚠️ 该预约已被标记为爽约，多次爽约将被限制预约</div>' : ''}
     `;
 
     document.getElementById('appointmentDetail').innerHTML = detailHtml;

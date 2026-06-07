@@ -54,6 +54,10 @@
                     <span class="nav-icon">🚫</span>
                     <span>手机号限制</span>
                 </div>
+                <div class="nav-item" data-tab="settings">
+                    <span class="nav-icon">⚙️</span>
+                    <span>系统设置</span>
+                </div>
                 <div class="nav-item nav-item-board" onclick="window.open('/board', '_blank')" style="cursor:pointer;">
                     <span class="nav-icon">📺</span>
                     <span>叫号看板</span>
@@ -168,6 +172,7 @@
                                 <option value="calling">叫号中</option>
                                 <option value="completed">已办理</option>
                                 <option value="cancelled">已取消</option>
+                                <option value="no_show">已爽约</option>
                             </select>
                         </div>
                         <div class="filter-item">
@@ -555,7 +560,9 @@
                                 <tr>
                                     <th>ID</th>
                                     <th>手机号</th>
+                                    <th>类型</th>
                                     <th>限制原因</th>
+                                    <th>爽约次数</th>
                                     <th>截止日期</th>
                                     <th>状态</th>
                                     <th>创建时间</th>
@@ -563,12 +570,42 @@
                                 </tr>
                             </thead>
                             <tbody id="restrictionList">
-                                <tr><td colspan="7" class="loading">加载中...</td></tr>
+                                <tr><td colspan="9" class="loading">加载中...</td></tr>
                             </tbody>
                         </table>
                     </div>
 
                     <div class="pagination" id="restrictionPagination"></div>
+                </div>
+
+                <div class="tab-content" id="tab-settings">
+                    <div class="page-header">
+                        <h3>系统设置</h3>
+                    </div>
+
+                    <div class="settings-section">
+                        <h4>爽约管理设置</h4>
+                        <div class="settings-form">
+                            <div class="form-group">
+                                <label>爽约阈值（次）</label>
+                                <input type="number" id="settingNoShowThreshold" min="1" max="30" value="3">
+                                <small class="form-tip">近30天内爽约达到此次数后自动加入限制名单</small>
+                            </div>
+                            <div class="form-group">
+                                <label>限制时长（天）</label>
+                                <input type="number" id="settingNoShowRestrictionDays" min="1" max="365" value="30">
+                                <small class="form-tip">自动限制的持续天数</small>
+                            </div>
+                            <div class="form-group">
+                                <label>统计窗口期（天）</label>
+                                <input type="number" id="settingNoShowWindowDays" min="1" max="365" value="30">
+                                <small class="form-tip">统计近多少天的爽约次数</small>
+                            </div>
+                            <div class="form-group form-actions">
+                                <button class="btn btn-primary" id="btnSaveSettings">保存设置</button>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </main>

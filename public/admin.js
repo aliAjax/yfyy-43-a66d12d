@@ -76,7 +76,8 @@ function getStatusText(status) {
         arrived: '已到场',
         calling: '叫号中',
         completed: '已办理',
-        cancelled: '已取消'
+        cancelled: '已取消',
+        'no_show': '已爽约'
     };
     return map[status] || status;
 }
@@ -106,7 +107,8 @@ function getReminderTypeText(type) {
         created: '预约创建',
         cancelled: '预约取消',
         arrived: '已到场',
-        completed: '办理完成'
+        completed: '办理完成',
+        'no_show': '爽约提醒'
     };
     return map[type] || type;
 }
@@ -116,7 +118,8 @@ function getReminderTypeClass(type) {
         created: 'status-pending',
         cancelled: 'status-cancelled',
         arrived: 'status-arrived',
-        completed: 'status-completed'
+        completed: 'status-completed',
+        'no_show': 'status-no_show'
     };
     return map[type] || '';
 }
@@ -172,7 +175,8 @@ function switchTab(tab) {
         reschedules: '改期记录',
         restrictions: '手机号限制',
         windows: '窗口管理',
-        'window-workstation': '窗口工作台'
+        'window-workstation': '窗口工作台',
+        settings: '系统设置'
     };
     document.getElementById('pageTitle').textContent = titles[tab];
 
@@ -196,6 +200,8 @@ function switchTab(tab) {
         loadWindows();
     } else if (tab === 'window-workstation') {
         loadWindowWorkstation();
+    } else if (tab === 'settings') {
+        loadSettings();
     }
 
     if (state.currentTab !== 'window-workstation' && state.workstation.refreshTimer) {
@@ -343,8 +349,10 @@ function renderAppointments(appointments) {
                     ${apt.status === 'arrived' ? `<button class="btn btn-sm btn-primary" onclick="callNumber(${apt.id})">叫号</button>` : ''}
                     ${apt.status === 'calling' ? `<button class="btn btn-sm btn-success" onclick="markCompleted(${apt.id})">完成</button>` : ''}
                     ${apt.status === 'calling' ? `<button class="btn btn-sm btn-secondary" onclick="nextNumber(${apt.id})">下一号</button>` : ''}
+                    ${apt.status === 'pending' || apt.status === 'arrived' ? `<button class="btn btn-sm btn-warning" onclick="markNoShow(${apt.id})">爽约</button>` : ''}
                     ${apt.status === 'pending' || apt.status === 'arrived' ? `<button class="btn btn-sm btn-secondary" onclick="markCancelled(${apt.id})">取消</button>` : ''}
                     ${apt.status === 'cancelled' ? `<button class="btn btn-sm btn-secondary" onclick="markPending(${apt.id})">恢复</button>` : ''}
+                    ${apt.status === 'no_show' ? `<button class="btn btn-sm btn-secondary" onclick="revertNoShow(${apt.id})">撤销爽约</button>` : ''}
                 </div>
             </td>
         </tr>
@@ -364,7 +372,14 @@ async function updateStatus(id, status) {
             throw new Error(data.error || '操作失败');
         }
 
-        showToast('操作成功', 'success');
+        let message = '操作成功';
+        if (status === 'no_show' && data.auto_restriction && data.auto_restriction.added) {
+            message = `已标记为爽约，该手机号近${data.no_show_count}次爽约，已自动加入限制名单至${data.auto_restriction.end_date}`;
+        } else if (status === 'no_show' && data.no_show_count !== null) {
+            message = `已标记为爽约，该手机号近30天爽约${data.no_show_count}次`;
+        }
+
+        showToast(message, 'success');
         
         if (state.currentTab === 'dashboard') {
             loadDashboard();
@@ -397,6 +412,33 @@ function markCancelled(id) {
 function markPending(id) {
     showConfirm('确认恢复', '确定恢复此预约？', () => {
         updateStatus(id, 'pending');
+    });
+}
+
+function markNoShow(id) {
+    showConfirm('确认爽约', '确定将此预约标记为爽约？标记后号源将释放，并可能触发手机号限制。', () => {
+        updateStatus(id, 'no_show');
+    });
+}
+
+async function revertNoShow(id) {
+    showConfirm('撤销爽约', '确定撤销此预约的爽约标记？撤销后号源将恢复。', async () => {
+        try {
+            const res = await fetch(`${API_BASE}/appointments/${id}/no-show/revert`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' }
+            });
+
+            const data = await res.json();
+            if (!res.ok) {
+                throw new Error(data.error || '操作失败');
+            }
+
+            showToast('已撤销爽约标记', 'success');
+            refreshCurrentView();
+        } catch (e) {
+            showToast(e.message, 'error');
+        }
     });
 }
 
@@ -1447,7 +1489,9 @@ function renderRestrictions() {
         <tr>
             <td>${r.id}</td>
             <td>${r.phone}</td>
+            <td><span class="status-badge ${r.is_auto ? 'status-no_show' : 'status-pending'}">${r.is_auto ? '自动限制' : '手动添加'}</span></td>
             <td>${escapeHtml(r.reason) || '<span style="color:#999;">未填写</span>'}</td>
+            <td>${r.no_show_count !== null && r.no_show_count !== undefined ? r.no_show_count + ' 次' : '-'}</td>
             <td>${r.end_date}</td>
             <td><span class="status-badge ${getRestrictionStatusClass(r.is_active)}">${getRestrictionStatusText(r.is_active)}</span></td>
             <td>${r.created_at ? r.created_at.substring(0, 16) : '-'}</td>
@@ -1592,6 +1636,65 @@ function deleteRestriction(id) {
             showToast(e.message, 'error');
         }
     });
+}
+
+async function loadSettings() {
+    try {
+        const res = await fetch(`${API_BASE}/system-settings`);
+        const settings = await res.json();
+
+        if (settings.no_show_threshold !== undefined) {
+            document.getElementById('settingNoShowThreshold').value = settings.no_show_threshold;
+        }
+        if (settings.no_show_restriction_days !== undefined) {
+            document.getElementById('settingNoShowRestrictionDays').value = settings.no_show_restriction_days;
+        }
+        if (settings.no_show_window_days !== undefined) {
+            document.getElementById('settingNoShowWindowDays').value = settings.no_show_window_days;
+        }
+    } catch (e) {
+        showToast('加载系统设置失败', 'error');
+    }
+}
+
+async function saveSettings() {
+    const threshold = parseInt(document.getElementById('settingNoShowThreshold').value, 10);
+    const restrictionDays = parseInt(document.getElementById('settingNoShowRestrictionDays').value, 10);
+    const windowDays = parseInt(document.getElementById('settingNoShowWindowDays').value, 10);
+
+    if (!threshold || threshold <= 0) {
+        showToast('爽约阈值必须是正整数', 'error');
+        return;
+    }
+    if (!restrictionDays || restrictionDays <= 0) {
+        showToast('限制时长必须是正整数', 'error');
+        return;
+    }
+    if (!windowDays || windowDays <= 0) {
+        showToast('统计窗口期必须是正整数', 'error');
+        return;
+    }
+
+    try {
+        const res = await fetch(`${API_BASE}/system-settings`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                no_show_threshold: threshold,
+                no_show_restriction_days: restrictionDays,
+                no_show_window_days: windowDays
+            })
+        });
+
+        const data = await res.json();
+        if (!res.ok) {
+            throw new Error(data.error || '保存失败');
+        }
+
+        showToast('设置保存成功', 'success');
+    } catch (e) {
+        showToast(e.message, 'error');
+    }
 }
 
 async function loadWindows() {
@@ -2603,12 +2706,19 @@ function init() {
     initNavigation();
     initModals();
     loadDashboard();
+    
+    const btnSaveSettings = document.getElementById('btnSaveSettings');
+    if (btnSaveSettings) {
+        btnSaveSettings.addEventListener('click', saveSettings);
+    }
 }
 
 window.markArrived = markArrived;
 window.markCompleted = markCompleted;
 window.markCancelled = markCancelled;
 window.markPending = markPending;
+window.markNoShow = markNoShow;
+window.revertNoShow = revertNoShow;
 window.callNumber = callNumber;
 window.nextNumber = nextNumber;
 window.editItem = editItem;
