@@ -197,6 +197,14 @@ const hasWindowId = aptColumns.some(c => c.name === 'window_id');
 if (!hasWindowId) {
   db.exec('ALTER TABLE appointments ADD COLUMN window_id INTEGER');
 }
+const hasSource = aptColumns.some(c => c.name === 'source');
+if (!hasSource) {
+  db.exec("ALTER TABLE appointments ADD COLUMN source TEXT NOT NULL DEFAULT 'user'");
+}
+const hasOperatorName = aptColumns.some(c => c.name === 'operator_name');
+if (!hasOperatorName) {
+  db.exec('ALTER TABLE appointments ADD COLUMN operator_name TEXT');
+}
 
 db.prepare("UPDATE appointment_reminders SET send_status = 'simulated' WHERE send_status = 'sent'").run();
 
@@ -960,16 +968,23 @@ function generateTimeSlots(count) {
   return slots;
 }
 
-app.post('/api/appointments', (req, res) => {
-  const { item_id, user_name, phone, appointment_date, time_slot } = req.body;
-
+function validateAndCreateAppointment({
+  item_id,
+  user_name,
+  phone,
+  appointment_date,
+  time_slot,
+  source = 'user',
+  operator_name = null,
+  window_id = null
+}) {
   if (!item_id || !user_name || !phone || !appointment_date || !time_slot) {
-    return res.status(400).json({ error: '请填写完整信息' });
+    throw new Error('请填写完整信息');
   }
 
   const phoneRegex = /^1[3-9]\d{9}$/;
   if (!phoneRegex.test(phone)) {
-    return res.status(400).json({ error: '请输入正确的手机号' });
+    throw new Error('请输入正确的手机号');
   }
 
   const restriction = db.prepare(
@@ -979,14 +994,7 @@ app.post('/api/appointments', (req, res) => {
   if (restriction) {
     const todayStr = getTodayStr();
     if (restriction.end_date >= todayStr) {
-      return res.status(400).json({
-        error: `该手机号已被限制预约，限制原因：${restriction.reason || '未填写'}，截止日期：${restriction.end_date}`,
-        restriction: {
-          phone: restriction.phone,
-          reason: restriction.reason,
-          end_date: restriction.end_date
-        }
-      });
+      throw new Error(`该手机号已被限制预约，限制原因：${restriction.reason || '未填写'}，截止日期：${restriction.end_date}`);
     } else {
       db.prepare('DELETE FROM phone_restrictions WHERE id = ?').run(restriction.id);
     }
@@ -996,16 +1004,16 @@ app.post('/api/appointments', (req, res) => {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   if (dateObj < today) {
-    return res.status(400).json({ error: '不能预约过去的日期' });
+    throw new Error('不能预约过去的日期');
   }
 
   if (!isWorkday(appointment_date)) {
-    return res.status(400).json({ error: '该日期不可预约' });
+    throw new Error('该日期不可预约');
   }
 
   const item = db.prepare('SELECT * FROM items WHERE id = ?').get(item_id);
   if (!item) {
-    return res.status(400).json({ error: '事项不存在' });
+    throw new Error('事项不存在');
   }
 
   const existingActive = db.prepare(
@@ -1016,9 +1024,7 @@ app.post('/api/appointments', (req, res) => {
   ).get(phone, item_id);
 
   if (existingActive) {
-    return res.status(400).json({ 
-      error: `该手机号已有未完成的${item.name}预约（${existingActive.appointment_date}），请先完成或取消后再预约` 
-    });
+    throw new Error(`该手机号已有未完成的${item.name}预约（${existingActive.appointment_date}），请先完成或取消后再预约`);
   }
 
   const timeSlotCaps = db.prepare(`
@@ -1039,11 +1045,11 @@ app.post('/api/appointments', (req, res) => {
     }
 
     if (!matchedTimeSlot) {
-      return res.status(400).json({ error: '所选时段无效，请重新选择' });
+      throw new Error('所选时段无效，请重新选择');
     }
 
     if (matchedTimeSlot.current_count >= matchedTimeSlot.max_count) {
-      return res.status(400).json({ error: '该时段号源已满，请选择其他时段' });
+      throw new Error('该时段号源已满，请选择其他时段');
     }
   } else {
     const slotCheck = db.prepare(
@@ -1052,7 +1058,7 @@ app.post('/api/appointments', (req, res) => {
     ).get(item_id, appointment_date, time_slot);
 
     if (slotCheck.cnt > 0) {
-      return res.status(400).json({ error: '该时段已被预约，请选择其他时段' });
+      throw new Error('该时段已被预约，请选择其他时段');
     }
   }
 
@@ -1065,19 +1071,55 @@ app.post('/api/appointments', (req, res) => {
       WHERE iw.item_id = ?
     `).get(item_id).cnt;
 
-    const itemWindows = db.prepare(`
-      SELECT iw.*, w.name as window_name, w.status as window_status
-      FROM item_windows iw
-      LEFT JOIN windows w ON iw.window_id = w.id
-      WHERE iw.item_id = ? AND w.status = 'active'
-      ORDER BY w.sort_order ASC, w.id ASC
-    `).all(item_id);
+    if (window_id) {
+      const itemWindow = db.prepare(`
+        SELECT iw.*, w.name as window_name, w.status as window_status
+        FROM item_windows iw
+        LEFT JOIN windows w ON iw.window_id = w.id
+        WHERE iw.item_id = ? AND iw.window_id = ? AND w.status = 'active'
+      `).get(item_id, window_id);
 
-    if (allItemWindows > 0 && itemWindows.length === 0) {
-      return res.status(400).json({ error: '该事项暂无可用办理窗口' });
-    }
+      if (!itemWindow) {
+        throw new Error('所选窗口不支持该事项或窗口不可用');
+      }
 
-    if (itemWindows.length > 0) {
+      let ws = db.prepare(
+        'SELECT * FROM window_slots WHERE window_id = ? AND item_id = ? AND date = ?'
+      ).get(window_id, item_id, appointment_date);
+
+      if (!ws) {
+        const defaultCapacity = itemWindow.default_capacity || 10;
+        db.prepare(
+          'INSERT INTO window_slots (window_id, item_id, date, max_count, current_count) VALUES (?, ?, ?, ?, 0)'
+        ).run(window_id, item_id, appointment_date, defaultCapacity);
+        ws = db.prepare(
+          'SELECT * FROM window_slots WHERE window_id = ? AND item_id = ? AND date = ?'
+        ).get(window_id, item_id, appointment_date);
+      }
+
+      const windowUsed = db.prepare(
+        `SELECT COUNT(*) as cnt FROM appointments 
+         WHERE window_id = ? AND item_id = ? AND appointment_date = ? AND status != 'cancelled'`
+      ).get(window_id, item_id, appointment_date).cnt;
+
+      if (windowUsed >= ws.max_count) {
+        throw new Error('该窗口号源已满，请选择其他窗口或日期');
+      }
+
+      assignedWindowId = window_id;
+    } else if (allItemWindows > 0) {
+      const itemWindows = db.prepare(`
+        SELECT iw.*, w.name as window_name, w.status as window_status
+        FROM item_windows iw
+        LEFT JOIN windows w ON iw.window_id = w.id
+        WHERE iw.item_id = ? AND w.status = 'active'
+        ORDER BY w.sort_order ASC, w.id ASC
+      `).all(item_id);
+
+      if (itemWindows.length === 0) {
+        throw new Error('该事项暂无可用办理窗口');
+      }
+
       let bestWindow = null;
       let bestAvailable = -1;
 
@@ -1110,7 +1152,7 @@ app.post('/api/appointments', (req, res) => {
       }
 
       if (!bestWindow) {
-        return res.status(400).json({ error: '所有窗口的号源均已满，请选择其他日期' });
+        throw new Error('所有窗口的号源均已满，请选择其他日期');
       }
 
       assignedWindowId = bestWindow.window_id;
@@ -1123,7 +1165,7 @@ app.post('/api/appointments', (req, res) => {
       }
 
       if (dailySlot.current_count >= dailySlot.max_count) {
-        return res.status(400).json({ error: '该日期号源已满，请选择其他日期' });
+        throw new Error('该日期号源已满，请选择其他日期');
       }
     }
   }
@@ -1135,8 +1177,8 @@ app.post('/api/appointments', (req, res) => {
 
   const tx = db.transaction(() => {
     const result = db.prepare(
-      'INSERT INTO appointments (item_id, user_name, phone, appointment_date, time_slot, status, queue_number, window_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-    ).run(item_id, user_name, phone, appointment_date, time_slot, 'pending', queueNumber, assignedWindowId);
+      'INSERT INTO appointments (item_id, user_name, phone, appointment_date, time_slot, status, queue_number, window_id, source, operator_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    ).run(item_id, user_name, phone, appointment_date, time_slot, 'pending', queueNumber, assignedWindowId, source, operator_name);
 
     const appointmentId = result.lastInsertRowid;
 
@@ -1163,11 +1205,25 @@ app.post('/api/appointments', (req, res) => {
     });
     createReminder(appointmentId, phone, 'created', reminderContent);
 
-    return { id: appointmentId, window_id: assignedWindowId, window_name: windowName };
+    return { id: appointmentId, window_id: assignedWindowId, window_name: windowName, queue_number: queueNumber };
   });
 
+  return tx();
+}
+
+app.post('/api/appointments', (req, res) => {
+  const { item_id, user_name, phone, appointment_date, time_slot } = req.body;
+
   try {
-    const result = tx();
+    const result = validateAndCreateAppointment({
+      item_id,
+      user_name,
+      phone,
+      appointment_date,
+      time_slot,
+      source: 'user'
+    });
+
     res.json({
       id: result.id,
       item_id,
@@ -1180,7 +1236,40 @@ app.post('/api/appointments', (req, res) => {
       window_name: result.window_name
     });
   } catch (e) {
-    res.status(500).json({ error: '预约失败，请重试' });
+    res.status(400).json({ error: e.message });
+  }
+});
+
+app.post('/api/admin/appointments', (req, res) => {
+  const { item_id, user_name, phone, appointment_date, time_slot, window_id, operator_name } = req.body;
+
+  try {
+    const result = validateAndCreateAppointment({
+      item_id,
+      user_name,
+      phone,
+      appointment_date,
+      time_slot,
+      source: 'admin',
+      operator_name: operator_name || '管理员',
+      window_id: window_id ? Number(window_id) : null
+    });
+
+    res.json({
+      id: result.id,
+      item_id,
+      user_name,
+      phone,
+      appointment_date,
+      time_slot,
+      status: 'pending',
+      window_id: result.window_id,
+      window_name: result.window_name,
+      queue_number: result.queue_number,
+      source: 'admin'
+    });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
   }
 });
 

@@ -140,6 +140,10 @@
                 </div>
 
                 <div class="tab-content" id="tab-appointments">
+                    <div class="page-header">
+                        <h3>预约管理</h3>
+                        <button class="btn btn-primary" id="btnAddAppointment">+ 代录预约</button>
+                    </div>
                     <div class="filter-bar">
                         <div class="filter-item">
                             <label>日期</label>
@@ -177,6 +181,7 @@
                             <thead>
                                 <tr>
                                     <th>ID</th>
+                                    <th>来源</th>
                                     <th>预约日期</th>
                                     <th>时段</th>
                                     <th>事项</th>
@@ -189,7 +194,7 @@
                                 </tr>
                             </thead>
                             <tbody id="appointmentList">
-                                <tr><td colspan="10" class="loading">加载中...</td></tr>
+                                <tr><td colspan="11" class="loading">加载中...</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -676,6 +681,51 @@
             <div class="modal-actions">
                 <button class="btn btn-secondary" id="btnCancelRestriction">取消</button>
                 <button class="btn btn-primary" id="btnSaveRestriction">保存</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal" id="addAppointmentModal">
+        <div class="modal-content">
+            <h3>代录预约</h3>
+            <div class="form-group">
+                <label>事项 <span class="required">*</span></label>
+                <select id="addAptItem">
+                    <option value="">请选择事项</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>预约日期 <span class="required">*</span></label>
+                <input type="date" id="addAptDate">
+            </div>
+            <div class="form-group">
+                <label>时段 <span class="required">*</span></label>
+                <select id="addAptTimeSlot">
+                    <option value="">请先选择日期</option>
+                </select>
+            </div>
+            <div class="form-group" id="addAptWindowGroup">
+                <label>窗口</label>
+                <select id="addAptWindow">
+                    <option value="">自动分配</option>
+                </select>
+                <small class="form-tip">选择后将直接分配到指定窗口，不选则自动分配到号源最充足的窗口</small>
+            </div>
+            <div class="form-group">
+                <label>姓名 <span class="required">*</span></label>
+                <input type="text" id="addAptName" placeholder="请输入姓名" maxlength="20">
+            </div>
+            <div class="form-group">
+                <label>手机号 <span class="required">*</span></label>
+                <input type="text" id="addAptPhone" placeholder="请输入手机号" maxlength="11">
+            </div>
+            <div class="form-group">
+                <label>操作人</label>
+                <input type="text" id="addAptOperator" placeholder="请输入操作人姓名（选填）" maxlength="20">
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" id="btnCancelAddApt">取消</button>
+                <button class="btn btn-primary" id="btnSaveAddApt">创建预约</button>
             </div>
         </div>
     </div>

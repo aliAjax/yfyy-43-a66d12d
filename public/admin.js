@@ -80,6 +80,22 @@ function getStatusClass(status) {
     return `status-${status}`;
 }
 
+function getSourceText(source) {
+    const map = {
+        user: '群众提交',
+        admin: '后台代录'
+    };
+    return map[source] || '群众提交';
+}
+
+function getSourceClass(source) {
+    const map = {
+        user: 'status-completed',
+        admin: 'status-pending'
+    };
+    return map[source] || 'status-completed';
+}
+
 function getReminderTypeText(type) {
     const map = {
         created: '预约创建',
@@ -278,7 +294,7 @@ async function searchAppointments() {
         state.appointments = await res.json();
         renderAppointments(state.appointments);
     } catch (e) {
-        document.getElementById('appointmentList').innerHTML = '<tr><td colspan="10" class="loading">加载失败</td></tr>';
+        document.getElementById('appointmentList').innerHTML = '<tr><td colspan="11" class="loading">加载失败</td></tr>';
     }
 }
 
@@ -288,7 +304,7 @@ function renderAppointments(appointments) {
     if (appointments.length === 0) {
         tbody.innerHTML = `
             <tr>
-                <td colspan="10" class="empty-state">
+                <td colspan="11" class="empty-state">
                     <div class="empty-icon">🔍</div>
                     <p>暂无符合条件的预约记录</p>
                 </td>
@@ -300,6 +316,7 @@ function renderAppointments(appointments) {
     tbody.innerHTML = appointments.map(apt => `
         <tr>
             <td>${apt.id}</td>
+            <td><span class="status-badge ${getSourceClass(apt.source)}">${getSourceText(apt.source)}</span></td>
             <td>${apt.appointment_date}</td>
             <td>${apt.time_slot}</td>
             <td>${apt.item_name}</td>
@@ -2100,6 +2117,143 @@ async function saveSlot() {
     }
 }
 
+function openAddAppointmentModal() {
+    loadAddAptItems();
+    document.getElementById('addAptTimeSlot').innerHTML = '<option value="">请先选择日期</option>';
+    document.getElementById('addAptWindow').innerHTML = '<option value="">自动分配</option>';
+    document.getElementById('addAptName').value = '';
+    document.getElementById('addAptPhone').value = '';
+    document.getElementById('addAptOperator').value = '';
+    
+    const today = new Date();
+    const year = today.getFullYear();
+    const month = (today.getMonth() + 1).toString().padStart(2, '0');
+    const day = today.getDate().toString().padStart(2, '0');
+    document.getElementById('addAptDate').value = `${year}-${month}-${day}`;
+    
+    document.getElementById('addAppointmentModal').classList.add('show');
+}
+
+function loadAddAptItems() {
+    const select = document.getElementById('addAptItem');
+    select.innerHTML = '<option value="">请选择事项</option>' +
+        state.items.map(item => `<option value="${item.id}">${item.name}</option>`).join('');
+}
+
+async function loadAddAptTimeSlotsAndWindows() {
+    const itemId = document.getElementById('addAptItem').value;
+    const date = document.getElementById('addAptDate').value;
+    
+    const timeSlotSelect = document.getElementById('addAptTimeSlot');
+    const windowSelect = document.getElementById('addAptWindow');
+    const windowGroup = document.getElementById('addAptWindowGroup');
+    
+    if (!itemId || !date) {
+        timeSlotSelect.innerHTML = '<option value="">请选择事项和日期</option>';
+        windowSelect.innerHTML = '<option value="">自动分配</option>';
+        return;
+    }
+    
+    try {
+        const res = await fetch(`${API_BASE}/slots/${itemId}/${date}`);
+        const data = await res.json();
+        
+        if (data.time_slots && data.time_slots.length > 0) {
+            timeSlotSelect.innerHTML = '<option value="">请选择时段</option>' +
+                data.time_slots.map(slot => 
+                    `<option value="${slot.time}" ${!slot.available ? 'disabled' : ''}>
+                        ${slot.time}${slot.available ? '' : '（已满）'}
+                    </option>`
+                ).join('');
+        } else {
+            timeSlotSelect.innerHTML = '<option value="">暂无可预约时段</option>';
+        }
+        
+        if (data.use_windows && data.windows && data.windows.length > 0) {
+            windowGroup.style.display = '';
+            windowSelect.innerHTML = '<option value="">自动分配</option>' +
+                data.windows.map(w => 
+                    `<option value="${w.window_id}" ${w.available_count <= 0 ? 'disabled' : ''}>
+                        ${w.window_name}（剩余${w.available_count}个）
+                    </option>`
+                ).join('');
+        } else {
+            windowGroup.style.display = 'none';
+            windowSelect.innerHTML = '<option value="">自动分配</option>';
+        }
+    } catch (e) {
+        console.error('加载时段失败', e);
+        timeSlotSelect.innerHTML = '<option value="">加载失败</option>';
+    }
+}
+
+async function saveAddAppointment() {
+    const item_id = document.getElementById('addAptItem').value;
+    const appointment_date = document.getElementById('addAptDate').value;
+    const time_slot = document.getElementById('addAptTimeSlot').value;
+    const window_id = document.getElementById('addAptWindow').value;
+    const user_name = document.getElementById('addAptName').value.trim();
+    const phone = document.getElementById('addAptPhone').value.trim();
+    const operator_name = document.getElementById('addAptOperator').value.trim();
+    
+    if (!item_id) {
+        showToast('请选择事项', 'error');
+        return;
+    }
+    if (!appointment_date) {
+        showToast('请选择预约日期', 'error');
+        return;
+    }
+    if (!time_slot) {
+        showToast('请选择时段', 'error');
+        return;
+    }
+    if (!user_name) {
+        showToast('请输入姓名', 'error');
+        return;
+    }
+    if (!phone) {
+        showToast('请输入手机号', 'error');
+        return;
+    }
+    if (!/^1[3-9]\d{9}$/.test(phone)) {
+        showToast('请输入正确的手机号', 'error');
+        return;
+    }
+    
+    try {
+        const res = await fetch(`${API_BASE}/admin/appointments`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                item_id: Number(item_id),
+                user_name,
+                phone,
+                appointment_date,
+                time_slot,
+                window_id: window_id ? Number(window_id) : null,
+                operator_name
+            })
+        });
+        
+        const data = await res.json();
+        if (!res.ok) {
+            throw new Error(data.error || '创建失败');
+        }
+        
+        showToast('预约创建成功', 'success');
+        document.getElementById('addAppointmentModal').classList.remove('show');
+        
+        if (state.currentTab === 'appointments') {
+            searchAppointments();
+        } else if (state.currentTab === 'dashboard') {
+            loadDashboard();
+        }
+    } catch (e) {
+        showToast(e.message, 'error');
+    }
+}
+
 function initModals() {
     document.getElementById('btnAddItem').addEventListener('click', openAddItemModal);
     document.getElementById('btnCancelItem').addEventListener('click', () => {
@@ -2145,6 +2299,14 @@ function initModals() {
         document.getElementById('filterPhone').value = '';
         searchAppointments();
     });
+
+    document.getElementById('btnAddAppointment').addEventListener('click', openAddAppointmentModal);
+    document.getElementById('btnCancelAddApt').addEventListener('click', () => {
+        document.getElementById('addAppointmentModal').classList.remove('show');
+    });
+    document.getElementById('btnSaveAddApt').addEventListener('click', saveAddAppointment);
+    document.getElementById('addAptItem').addEventListener('change', loadAddAptTimeSlotsAndWindows);
+    document.getElementById('addAptDate').addEventListener('change', loadAddAptTimeSlotsAndWindows);
 
     document.getElementById('btnSearchReminder').addEventListener('click', () => {
         state.reminderPage = 1;
