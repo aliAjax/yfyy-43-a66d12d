@@ -786,6 +786,21 @@ app.get('/api/slots/:itemId/:date', (req, res) => {
     ORDER BY w.sort_order ASC, w.id ASC
   `).all(itemId);
 
+  if (allItemWindows > 0 && itemWindows.length === 0) {
+    res.json({
+      available: false,
+      reason: '该事项暂无可用办理窗口',
+      date,
+      max_count: 0,
+      current_count: 0,
+      available_count: 0,
+      time_slots: [],
+      use_windows: true,
+      windows: []
+    });
+    return;
+  }
+
   if (timeSlotCaps.length > 0) {
     let totalMax = 0;
     let totalCurrent = 0;
@@ -813,11 +828,10 @@ app.get('/api/slots/:itemId/:date', (req, res) => {
 
     let windowSlots = [];
     let useWindows = false;
+    let windowTotalAvailable = 0;
 
-    if (allItemWindows > 0 && itemWindows.length > 0) {
+    if (allItemWindows > 0) {
       useWindows = true;
-      let winTotalMax = 0;
-      let winTotalCurrent = 0;
 
       itemWindows.forEach(iw => {
         let ws = db.prepare(
@@ -842,8 +856,7 @@ app.get('/api/slots/:itemId/:date', (req, res) => {
         const windowUsedCount = windowApts.cnt;
         const windowAvailable = Math.max(0, ws.max_count - windowUsedCount);
 
-        winTotalMax += ws.max_count;
-        winTotalCurrent += windowUsedCount;
+        windowTotalAvailable += windowAvailable;
 
         windowSlots.push({
           window_id: iw.window_id,
@@ -855,31 +868,23 @@ app.get('/api/slots/:itemId/:date', (req, res) => {
       });
     }
 
+    const effectiveAvailable = useWindows ? Math.min(totalAvailable, windowTotalAvailable) : totalAvailable;
+    if (useWindows && windowTotalAvailable <= 0) {
+      timeSlots.forEach(slot => {
+        slot.available = false;
+      });
+    }
+
     res.json({
-      available: totalAvailable > 0,
+      available: effectiveAvailable > 0,
       date,
       max_count: totalMax,
       current_count: totalCurrent,
-      available_count: totalAvailable,
+      available_count: effectiveAvailable,
       time_slots: timeSlots,
       use_time_slots: true,
       use_windows: useWindows,
       windows: windowSlots
-    });
-    return;
-  }
-
-  if (allItemWindows > 0 && itemWindows.length === 0) {
-    res.json({
-      available: false,
-      reason: '该事项暂无可用办理窗口',
-      date,
-      max_count: 0,
-      current_count: 0,
-      available_count: 0,
-      time_slots: [],
-      use_windows: true,
-      windows: []
     });
     return;
   }
