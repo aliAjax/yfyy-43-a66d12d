@@ -3443,7 +3443,12 @@ app.post('/api/windows/:windowId/skip', (req, res) => {
       return { has_next: true, next: nextApt, skipped: currentApt };
     }
 
-    return { has_next: false, next: null, skipped: currentApt };
+    return {
+      has_next: false,
+      next: null,
+      skipped: currentApt,
+      blocked_by_item_calling: waitingApts.length > 0
+    };
   });
 
   try {
@@ -3453,7 +3458,9 @@ app.post('/api/windows/:windowId/skip', (req, res) => {
       has_next: result.has_next,
       next_appointment: result.next,
       skipped_appointment: result.skipped,
-      message: result.has_next ? '已跳过，叫下一位' : '已跳过，暂无下一位（其他事项均在叫号中）'
+      message: result.has_next
+        ? '已跳过，叫下一位'
+        : (result.blocked_by_item_calling ? '已跳过，暂无可叫下一位（其他事项正在叫号中）' : '已跳过，暂无下一位')
     });
   } catch (e) {
     res.status(500).json({ error: '操作失败' });
