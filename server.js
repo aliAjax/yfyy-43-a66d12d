@@ -10,7 +10,8 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-const db = new Database('appointment.db');
+const dbPath = process.env.APPOINTMENT_DB_PATH || 'appointment.db';
+const db = new Database(dbPath);
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS items (
@@ -5681,7 +5682,11 @@ app.get('/api/board/windows', (req, res) => {
   });
 });
 
-app.listen(PORT, () => {
-  console.log(`预约系统已启动: http://localhost:${PORT}`);
-  console.log(`后台管理: http://localhost:${PORT}/admin`);
-});
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`预约系统已启动: http://localhost:${PORT}`);
+    console.log(`后台管理: http://localhost:${PORT}/admin`);
+  });
+}
+
+module.exports = { app, db };
