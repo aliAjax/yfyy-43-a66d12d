@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        node-version: [ 18.x, 20.x ]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Initialize database
+        run: npm run db:init
+        env:
+          DB_PATH: /tmp/test-ci.db
+
+      - name: Run tests
+        run: npm run test:ci
+        env:
+          DB_PATH: /tmp/test-ci.db
+
+      - name: Verify server starts
+        run: |
+          timeout 5 node server.js &
+          SERVER_PID=$!
+          sleep 2
+          if kill -0 $SERVER_PID 2>/dev/null; then
+            kill $SERVER_PID
+            echo "Server started successfully"
+            exit 0
+          else
+            echo "Server failed to start"
+            exit 1
+          fi
+        env:
+          PORT: 3100
+          DB_PATH: /tmp/verify-ci.db

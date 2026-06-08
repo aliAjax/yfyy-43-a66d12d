@@ -1,10 +1,10 @@
 const express = require('express');
 const cors = require('cors');
-const Database = require('better-sqlite3');
 const path = require('path');
-const reminderService = require('./services/reminderService');
-const windowService = require('./services/windowService');
-const capacityService = require('./services/capacityService');
+const { initDatabase, getSystemSetting: getSysSetting, setSystemSetting: setSysSetting } = require('./db');
+const createReminderService = require('./services/reminderService');
+const createCapacityService = require('./services/capacityService');
+const createWindowService = require('./services/windowService');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -13,593 +13,61 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-const dbPath = process.env.APPOINTMENT_DB_PATH || 'appointment.db';
-const db = new Database(dbPath);
+const db = initDatabase();
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS items (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    description TEXT,
-    default_max_count INTEGER NOT NULL DEFAULT 20,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  );
-
-  CREATE TABLE IF NOT EXISTS daily_slots (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    item_id INTEGER NOT NULL,
-    date TEXT NOT NULL,
-    max_count INTEGER NOT NULL DEFAULT 20,
-    current_count INTEGER NOT NULL DEFAULT 0,
-    FOREIGN KEY (item_id) REFERENCES items(id),
-    UNIQUE(item_id, date)
-  );
-
-  CREATE TABLE IF NOT EXISTS holidays (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    date TEXT NOT NULL UNIQUE,
-    name TEXT
-  );
-
-  CREATE TABLE IF NOT EXISTS appointments (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    item_id INTEGER NOT NULL,
-    user_name TEXT NOT NULL,
-    phone TEXT NOT NULL,
-    appointment_date TEXT NOT NULL,
-    time_slot TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'pending',
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (item_id) REFERENCES items(id)
-  );
-
-  CREATE TABLE IF NOT EXISTS item_materials (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    item_id INTEGER NOT NULL,
-    name TEXT NOT NULL,
-    description TEXT,
-    sort_order INTEGER NOT NULL DEFAULT 0,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE
-  );
-
-  CREATE TABLE IF NOT EXISTS appointment_reminders (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    appointment_id INTEGER NOT NULL,
-    phone TEXT NOT NULL,
-    type TEXT NOT NULL,
-    content TEXT NOT NULL,
-    send_status TEXT NOT NULL DEFAULT 'sent',
-    scheduled_for DATETIME,
-    sent_at DATETIME,
-    fail_reason TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (appointment_id) REFERENCES appointments(id)
-  );
-
-  CREATE TABLE IF NOT EXISTS appointment_reviews (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    appointment_id INTEGER NOT NULL,
-    item_id INTEGER NOT NULL,
-    user_name TEXT NOT NULL,
-    phone TEXT NOT NULL,
-    rating INTEGER NOT NULL,
-    feedback TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (appointment_id) REFERENCES appointments(id),
-    FOREIGN KEY (item_id) REFERENCES items(id),
-    UNIQUE(appointment_id)
-  );
-
-  CREATE TABLE IF NOT EXISTS phone_restrictions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    phone TEXT NOT NULL UNIQUE,
-    reason TEXT,
-    end_date TEXT NOT NULL,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  );
-
-  CREATE TABLE IF NOT EXISTS windows (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    description TEXT,
-    status TEXT NOT NULL DEFAULT 'active',
-    sort_order INTEGER NOT NULL DEFAULT 0,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  );
-
-  CREATE TABLE IF NOT EXISTS item_windows (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    item_id INTEGER NOT NULL,
-    window_id INTEGER NOT NULL,
-    default_capacity INTEGER NOT NULL DEFAULT 10,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE,
-    FOREIGN KEY (window_id) REFERENCES windows(id) ON DELETE CASCADE,
-    UNIQUE(item_id, window_id)
-  );
-
-  CREATE TABLE IF NOT EXISTS window_slots (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    window_id INTEGER NOT NULL,
-    item_id INTEGER NOT NULL,
-    date TEXT NOT NULL,
-    max_count INTEGER NOT NULL DEFAULT 10,
-    current_count INTEGER NOT NULL DEFAULT 0,
-    FOREIGN KEY (window_id) REFERENCES windows(id),
-    FOREIGN KEY (item_id) REFERENCES items(id),
-    UNIQUE(window_id, item_id, date)
-  );
-
-  CREATE TABLE IF NOT EXISTS time_slot_capacities (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    item_id INTEGER NOT NULL,
-    date TEXT NOT NULL,
-    start_time TEXT NOT NULL,
-    end_time TEXT NOT NULL,
-    max_count INTEGER NOT NULL DEFAULT 0,
-    current_count INTEGER NOT NULL DEFAULT 0,
-    sort_order INTEGER NOT NULL DEFAULT 0,
-    FOREIGN KEY (item_id) REFERENCES items(id),
-    UNIQUE(item_id, date, start_time, end_time)
-  );
-
-  CREATE INDEX IF NOT EXISTS idx_materials_item ON item_materials(item_id);
-  CREATE INDEX IF NOT EXISTS idx_appointments_phone_item ON appointments(phone, item_id);
-  CREATE INDEX IF NOT EXISTS idx_appointments_date ON appointments(appointment_date);
-  CREATE INDEX IF NOT EXISTS idx_reminders_phone ON appointment_reminders(phone);
-  CREATE INDEX IF NOT EXISTS idx_reminders_appointment ON appointment_reminders(appointment_id);
-  CREATE INDEX IF NOT EXISTS idx_reminders_created ON appointment_reminders(created_at);
-  CREATE INDEX IF NOT EXISTS idx_reviews_appointment ON appointment_reviews(appointment_id);
-  CREATE INDEX IF NOT EXISTS idx_reviews_item ON appointment_reviews(item_id);
-  CREATE INDEX IF NOT EXISTS idx_reviews_created ON appointment_reviews(created_at);
-  CREATE INDEX IF NOT EXISTS idx_phone_restrictions_phone ON phone_restrictions(phone);
-  CREATE INDEX IF NOT EXISTS idx_phone_restrictions_end_date ON phone_restrictions(end_date);
-  CREATE INDEX IF NOT EXISTS idx_windows_status ON windows(status);
-  CREATE INDEX IF NOT EXISTS idx_item_windows_item ON item_windows(item_id);
-  CREATE INDEX IF NOT EXISTS idx_item_windows_window ON item_windows(window_id);
-  CREATE INDEX IF NOT EXISTS idx_window_slots_window_item ON window_slots(window_id, item_id, date);
-  CREATE TABLE IF NOT EXISTS appointment_reschedules (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    appointment_id INTEGER NOT NULL,
-    item_id INTEGER NOT NULL,
-    old_date TEXT NOT NULL,
-    old_time_slot TEXT NOT NULL,
-    old_window_id INTEGER,
-    new_date TEXT NOT NULL,
-    new_time_slot TEXT NOT NULL,
-    new_window_id INTEGER,
-    operator_type TEXT NOT NULL DEFAULT 'user',
-    operator_name TEXT,
-    reason TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (appointment_id) REFERENCES appointments(id),
-    FOREIGN KEY (item_id) REFERENCES items(id),
-    FOREIGN KEY (old_window_id) REFERENCES windows(id),
-    FOREIGN KEY (new_window_id) REFERENCES windows(id)
-  );
-
-  CREATE INDEX IF NOT EXISTS idx_reschedules_appointment ON appointment_reschedules(appointment_id);
-  CREATE INDEX IF NOT EXISTS idx_reschedules_item ON appointment_reschedules(item_id);
-  CREATE INDEX IF NOT EXISTS idx_reschedules_created ON appointment_reschedules(created_at);
-  CREATE INDEX IF NOT EXISTS idx_time_slots_item_date ON time_slot_capacities(item_id, date);
-
-  CREATE TABLE IF NOT EXISTS system_settings (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    setting_key TEXT NOT NULL UNIQUE,
-    setting_value TEXT,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  );
-
-  CREATE INDEX IF NOT EXISTS idx_settings_key ON system_settings(setting_key);
-
-  CREATE TABLE IF NOT EXISTS appointment_material_snapshots (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    appointment_id INTEGER NOT NULL,
-    material_id INTEGER,
-    material_name TEXT NOT NULL,
-    material_description TEXT,
-    is_required INTEGER NOT NULL DEFAULT 0,
-    require_confirmation INTEGER NOT NULL DEFAULT 0,
-    is_confirmed INTEGER NOT NULL DEFAULT 0,
-    sort_order INTEGER NOT NULL DEFAULT 0,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (appointment_id) REFERENCES appointments(id) ON DELETE CASCADE
-  );
-
-  CREATE INDEX IF NOT EXISTS idx_snapshots_appointment ON appointment_material_snapshots(appointment_id);
-
-  CREATE TABLE IF NOT EXISTS weekly_daily_templates (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    item_id INTEGER NOT NULL,
-    weekday INTEGER NOT NULL,
-    max_count INTEGER NOT NULL DEFAULT 20,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE,
-    UNIQUE(item_id, weekday)
-  );
-
-  CREATE TABLE IF NOT EXISTS weekly_time_slot_templates (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    item_id INTEGER NOT NULL,
-    weekday INTEGER NOT NULL,
-    start_time TEXT NOT NULL,
-    end_time TEXT NOT NULL,
-    max_count INTEGER NOT NULL DEFAULT 0,
-    sort_order INTEGER NOT NULL DEFAULT 0,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE
-  );
-
-  CREATE INDEX IF NOT EXISTS idx_weekly_ts_item_weekday ON weekly_time_slot_templates(item_id, weekday);
-
-  CREATE TABLE IF NOT EXISTS weekly_window_templates (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    item_id INTEGER NOT NULL,
-    window_id INTEGER NOT NULL,
-    weekday INTEGER NOT NULL,
-    max_count INTEGER NOT NULL DEFAULT 10,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE,
-    FOREIGN KEY (window_id) REFERENCES windows(id) ON DELETE CASCADE,
-    UNIQUE(item_id, window_id, weekday)
-  );
-
-  CREATE INDEX IF NOT EXISTS idx_weekly_windows_item_weekday ON weekly_window_templates(item_id, weekday);
-`);
-
-const columns = db.prepare("PRAGMA table_info(items)").all();
-const hasDefaultMaxCount = columns.some(c => c.name === 'default_max_count');
-if (!hasDefaultMaxCount) {
-  db.exec('ALTER TABLE items ADD COLUMN default_max_count INTEGER NOT NULL DEFAULT 20');
-}
-
-const aptColumns = db.prepare("PRAGMA table_info(appointments)").all();
-const hasQueueNumber = aptColumns.some(c => c.name === 'queue_number');
-if (!hasQueueNumber) {
-  db.exec('ALTER TABLE appointments ADD COLUMN queue_number INTEGER');
-}
-const hasCalledAt = aptColumns.some(c => c.name === 'called_at');
-if (!hasCalledAt) {
-  db.exec('ALTER TABLE appointments ADD COLUMN called_at DATETIME');
-}
-const hasWindowId = aptColumns.some(c => c.name === 'window_id');
-if (!hasWindowId) {
-  db.exec('ALTER TABLE appointments ADD COLUMN window_id INTEGER');
-}
-const hasSource = aptColumns.some(c => c.name === 'source');
-if (!hasSource) {
-  db.exec("ALTER TABLE appointments ADD COLUMN source TEXT NOT NULL DEFAULT 'user'");
-}
-const hasOperatorName = aptColumns.some(c => c.name === 'operator_name');
-if (!hasOperatorName) {
-  db.exec('ALTER TABLE appointments ADD COLUMN operator_name TEXT');
-}
-
-const reminderColumns = db.prepare("PRAGMA table_info(appointment_reminders)").all();
-const hasReminderScheduledFor = reminderColumns.some(c => c.name === 'scheduled_for');
-if (!hasReminderScheduledFor) {
-  db.exec('ALTER TABLE appointment_reminders ADD COLUMN scheduled_for DATETIME');
-}
-const hasReminderSentAt = reminderColumns.some(c => c.name === 'sent_at');
-if (!hasReminderSentAt) {
-  db.exec('ALTER TABLE appointment_reminders ADD COLUMN sent_at DATETIME');
-}
-const hasReminderFailReason = reminderColumns.some(c => c.name === 'fail_reason');
-if (!hasReminderFailReason) {
-  db.exec('ALTER TABLE appointment_reminders ADD COLUMN fail_reason TEXT');
-}
-db.exec('CREATE INDEX IF NOT EXISTS idx_reminders_status_schedule ON appointment_reminders(send_status, scheduled_for)');
-
-const itemColumns = db.prepare("PRAGMA table_info(items)").all();
-const hasAdvanceWeeks = itemColumns.some(c => c.name === 'advance_weeks');
-if (!hasAdvanceWeeks) {
-  db.exec('ALTER TABLE items ADD COLUMN advance_weeks INTEGER');
-}
-const hasAllowSameDay = itemColumns.some(c => c.name === 'allow_same_day');
-if (!hasAllowSameDay) {
-  db.exec('ALTER TABLE items ADD COLUMN allow_same_day INTEGER');
-}
-const hasCancelDeadlineHours = itemColumns.some(c => c.name === 'cancel_deadline_hours');
-if (!hasCancelDeadlineHours) {
-  db.exec('ALTER TABLE items ADD COLUMN cancel_deadline_hours INTEGER');
-}
-const hasRescheduleDeadlineHours = itemColumns.some(c => c.name === 'reschedule_deadline_hours');
-if (!hasRescheduleDeadlineHours) {
-  db.exec('ALTER TABLE items ADD COLUMN reschedule_deadline_hours INTEGER');
-}
-const hasMaxActiveAppointments = itemColumns.some(c => c.name === 'max_active_appointments');
-if (!hasMaxActiveAppointments) {
-  db.exec('ALTER TABLE items ADD COLUMN max_active_appointments INTEGER');
-}
-
-const restrictionColumns = db.prepare("PRAGMA table_info(phone_restrictions)").all();
-const hasIsAuto = restrictionColumns.some(c => c.name === 'is_auto');
-if (!hasIsAuto) {
-  db.exec("ALTER TABLE phone_restrictions ADD COLUMN is_auto INTEGER NOT NULL DEFAULT 0");
-}
-const hasNoShowCount = restrictionColumns.some(c => c.name === 'no_show_count');
-if (!hasNoShowCount) {
-  db.exec('ALTER TABLE phone_restrictions ADD COLUMN no_show_count INTEGER');
-}
-const hasRestrictionType = restrictionColumns.some(c => c.name === 'restriction_type');
-if (!hasRestrictionType) {
-  db.exec("ALTER TABLE phone_restrictions ADD COLUMN restriction_type TEXT NOT NULL DEFAULT 'manual'");
-}
-
-const aptMoreColumns = db.prepare("PRAGMA table_info(appointments)").all();
-const hasNoShowAt = aptMoreColumns.some(c => c.name === 'no_show_at');
-if (!hasNoShowAt) {
-  db.exec('ALTER TABLE appointments ADD COLUMN no_show_at DATETIME');
-}
-
-const matColumns = db.prepare("PRAGMA table_info(item_materials)").all();
-const hasIsRequired = matColumns.some(c => c.name === 'is_required');
-if (!hasIsRequired) {
-  db.exec('ALTER TABLE item_materials ADD COLUMN is_required INTEGER NOT NULL DEFAULT 0');
-}
-const hasRequireConfirmation = matColumns.some(c => c.name === 'require_confirmation');
-if (!hasRequireConfirmation) {
-  db.exec('ALTER TABLE item_materials ADD COLUMN require_confirmation INTEGER NOT NULL DEFAULT 0');
-}
-
-const dailySlotColumns = db.prepare("PRAGMA table_info(daily_slots)").all();
-const hasDailySlotSource = dailySlotColumns.some(c => c.name === 'source_type');
-if (!hasDailySlotSource) {
-  db.exec("ALTER TABLE daily_slots ADD COLUMN source_type TEXT NOT NULL DEFAULT 'manual'");
-}
-
-const timeSlotColumns = db.prepare("PRAGMA table_info(time_slot_capacities)").all();
-const hasTimeSlotSource = timeSlotColumns.some(c => c.name === 'source_type');
-if (!hasTimeSlotSource) {
-  db.exec("ALTER TABLE time_slot_capacities ADD COLUMN source_type TEXT NOT NULL DEFAULT 'manual'");
-}
-
-const windowSlotColumns = db.prepare("PRAGMA table_info(window_slots)").all();
-const hasWindowSlotSource = windowSlotColumns.some(c => c.name === 'source_type');
-if (!hasWindowSlotSource) {
-  db.exec("ALTER TABLE window_slots ADD COLUMN source_type TEXT NOT NULL DEFAULT 'manual'");
-}
+const capacityService = createCapacityService(db);
+const reminderService = createReminderService(db);
+const windowService = createWindowService(db, capacityService);
 
 function getSystemSetting(key, defaultValue = null) {
-  const row = db.prepare('SELECT setting_value FROM system_settings WHERE setting_key = ?').get(key);
-  return row ? row.setting_value : defaultValue;
+  return getSysSetting(db, key, defaultValue);
 }
 
 function setSystemSetting(key, value) {
-  db.prepare(`
-    INSERT INTO system_settings (setting_key, setting_value, updated_at)
-    VALUES (?, ?, CURRENT_TIMESTAMP)
-    ON CONFLICT(setting_key) DO UPDATE SET
-      setting_value = excluded.setting_value,
-      updated_at = CURRENT_TIMESTAMP
-  `).run(key, value);
+  return setSysSetting(db, key, value);
 }
 
-function initSystemSettings() {
-  const settings = [
-    { key: 'no_show_threshold', value: '3' },
-    { key: 'no_show_restriction_days', value: '30' },
-    { key: 'no_show_window_days', value: '30' }
-  ];
-
-  for (const s of settings) {
-    const existing = getSystemSetting(s.key);
-    if (existing === null || existing === undefined) {
-      setSystemSetting(s.key, s.value);
-    }
-  }
-  console.log('已初始化系统设置');
-}
-
-initSystemSettings();
-
-db.prepare("UPDATE appointment_reminders SET send_status = 'simulated' WHERE send_status = 'sent'").run();
-
-function initDefaultData() {
-  const itemCount = db.prepare('SELECT COUNT(*) as cnt FROM items').get().cnt;
-  if (itemCount === 0) {
-    const insertItem = db.prepare('INSERT INTO items (name, description, default_max_count) VALUES (?, ?, ?)');
-    insertItem.run('身份证办理', '首次申领、换领、补领居民身份证', 30);
-    insertItem.run('社保业务', '社保查询、缴费、转移等业务', 25);
-    insertItem.run('居住证办理', '居住证申领、签注、变更', 20);
-    insertItem.run('民政业务', '低保、特困、临时救助等申请', 15);
-    console.log('已初始化默认事项数据');
-  }
-
-  const windowCount = db.prepare('SELECT COUNT(*) as cnt FROM windows').get().cnt;
-  if (windowCount === 0) {
-    const insertWindow = db.prepare('INSERT INTO windows (name, description, status, sort_order) VALUES (?, ?, ?, ?)');
-    insertWindow.run('1号窗口', '综合业务窗口', 'active', 1);
-    insertWindow.run('2号窗口', '综合业务窗口', 'active', 2);
-    insertWindow.run('3号窗口', '社保专窗', 'active', 3);
-    insertWindow.run('4号窗口', '户政专窗', 'active', 4);
-    insertWindow.run('5号窗口', '民政专窗', 'active', 5);
-    console.log('已初始化默认窗口数据');
-  }
-
-  const itemWindowCount = db.prepare('SELECT COUNT(*) as cnt FROM item_windows').get().cnt;
-  if (itemWindowCount === 0) {
-    const items = db.prepare('SELECT * FROM items ORDER BY id').all();
-    const windows = db.prepare('SELECT * FROM windows ORDER BY sort_order').all();
-    
-    const insertItemWindow = db.prepare('INSERT INTO item_windows (item_id, window_id, default_capacity) VALUES (?, ?, ?)');
-    
-    items.forEach(item => {
-      windows.forEach(window => {
-        let capacity = Math.ceil((item.default_max_count || 20) / 2);
-        if (item.name === '社保业务' && window.name === '3号窗口') {
-          capacity = item.default_max_count || 25;
-        }
-        if (item.name === '身份证办理' && window.name === '4号窗口') {
-          capacity = item.default_max_count || 30;
-        }
-        if (item.name === '民政业务' && window.name === '5号窗口') {
-          capacity = item.default_max_count || 15;
-        }
-        if (window.name === '1号窗口' || window.name === '2号窗口') {
-          capacity = Math.ceil((item.default_max_count || 20) / 3);
-        }
-        insertItemWindow.run(item.id, window.id, capacity);
-      });
+app.get('/api/health', (req, res) => {
+  try {
+    const itemsCount = db.prepare('SELECT COUNT(*) as cnt FROM items').get().cnt;
+    const appointmentsCount = db.prepare('SELECT COUNT(*) as cnt FROM appointments').get().cnt;
+    res.json({
+      status: 'ok',
+      timestamp: new Date().toISOString(),
+      database: 'connected',
+      stats: {
+        items: itemsCount,
+        appointments: appointmentsCount
+      }
     });
-    console.log('已初始化默认事项-窗口关联数据');
+  } catch (e) {
+    res.status(500).json({
+      status: 'error',
+      timestamp: new Date().toISOString(),
+      error: e.message
+    });
   }
+});
 
-  const holidayCount = db.prepare('SELECT COUNT(*) as cnt FROM holidays').get().cnt;
-  if (holidayCount === 0) {
-    const insertHoliday = db.prepare('INSERT INTO holidays (date, name) VALUES (?, ?)');
-    const year = new Date().getFullYear();
-    insertHoliday.run(`${year}-10-01`, '国庆节');
-    insertHoliday.run(`${year}-05-01`, '劳动节');
-    insertHoliday.run(`${year}-01-01`, '元旦');
-    console.log('已初始化默认节假日数据');
-  }
-}
+const createReminder = reminderService.createReminder.bind(reminderService);
+const generateReminderContent = reminderService.generateReminderContent.bind(reminderService);
+const createScheduledReminders = reminderService.createScheduledReminders.bind(reminderService);
+const cancelPendingReminders = reminderService.cancelPendingReminders.bind(reminderService);
+const sendReminder = reminderService.sendReminder.bind(reminderService);
 
-initDefaultData();
-
-function createReminder(appointmentId, phone, type, content, options = {}) {
-  return reminderService.createReminder(db, appointmentId, phone, type, content, options);
-}
-
-function generateReminderContent(type, appointment) {
-  return reminderService.generateReminderContent(type, appointment);
-}
-
-function cancelPendingReminderPlans(appointmentId) {
-  return reminderService.cancelPendingReminderPlans(db, appointmentId);
-}
-
-function createPreAppointmentReminderPlans(appointment) {
-  return reminderService.createPreAppointmentReminderPlans(db, appointment);
-}
-
-function sendReminderNow(reminderId) {
-  return reminderService.sendReminderNow(db, reminderId);
-}
-
-function getTodayStr() {
-  const today = new Date();
-  return today.toISOString().split('T')[0];
-}
-
-function isValidDate(dateStr) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return false;
-  const date = new Date(dateStr);
-  if (isNaN(date.getTime())) return false;
-  const year = date.getFullYear();
-  const month = (date.getMonth() + 1).toString().padStart(2, '0');
-  const day = date.getDate().toString().padStart(2, '0');
-  return `${year}-${month}-${day}` === dateStr;
-}
-
-function isWorkday(dateStr) {
-  const date = new Date(dateStr);
-  const day = date.getDay();
-  if (day === 0 || day === 6) return false;
-
-  const holiday = db.prepare('SELECT id FROM holidays WHERE date = ?').get(dateStr);
-  if (holiday) return false;
-
-  return true;
-}
-
-function getAppointmentStartTime(timeSlot) {
-  if (!timeSlot) return '09:00';
-  const parts = timeSlot.split('-');
-  return parts[0] || '09:00';
-}
-
-function getMaxAdvanceDate(item) {
-  const weeks = (item.advance_weeks !== null && item.advance_weeks !== undefined) ? item.advance_weeks : 4;
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const maxDate = new Date(today);
-  maxDate.setDate(today.getDate() + weeks * 7 - 1);
-  return maxDate;
-}
-
-function isDateWithinAdvanceWeeks(dateStr, item) {
-  const date = new Date(dateStr);
-  date.setHours(0, 0, 0, 0);
-  const maxDate = getMaxAdvanceDate(item);
-  maxDate.setHours(23, 59, 59, 999);
-  return date <= maxDate;
-}
-
-function isSameDayBookingAllowed(item) {
-  if (item.allow_same_day === null || item.allow_same_day === undefined) {
-    return true;
-  }
-  return item.allow_same_day === 1;
-}
-
-function isSameDayReschedulingAllowed(item) {
-  if (item.allow_same_day === null || item.allow_same_day === undefined) {
-    return false;
-  }
-  return item.allow_same_day === 1;
-}
-
-function getAppointmentDateTime(dateStr, timeSlot) {
-  const startTime = getAppointmentStartTime(timeSlot);
-  const [hours, minutes] = startTime.split(':').map(Number);
-  const date = new Date(dateStr);
-  date.setHours(hours, minutes, 0, 0);
-  return date;
-}
-
-function isCancellationAllowed(appointment, item) {
-  if (appointment.status !== 'pending') return false;
-
-  const deadlineHours = item.cancel_deadline_hours;
-  if (deadlineHours === null || deadlineHours === undefined) {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const aptDate = new Date(appointment.appointment_date);
-    aptDate.setHours(0, 0, 0, 0);
-    return aptDate >= today;
-  }
-
-  const aptDateTime = getAppointmentDateTime(appointment.appointment_date, appointment.time_slot);
-  const now = new Date();
-  const deadline = new Date(aptDateTime.getTime() - deadlineHours * 60 * 60 * 1000);
-  return now <= deadline;
-}
-
-function isReschedulingAllowed(appointment, item) {
-  if (appointment.status !== 'pending') return false;
-
-  const deadlineHours = item.reschedule_deadline_hours;
-  if (deadlineHours === null || deadlineHours === undefined) {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const aptDate = new Date(appointment.appointment_date);
-    aptDate.setHours(0, 0, 0, 0);
-    return aptDate >= today;
-  }
-
-  const aptDateTime = getAppointmentDateTime(appointment.appointment_date, appointment.time_slot);
-  const now = new Date();
-  const deadline = new Date(aptDateTime.getTime() - deadlineHours * 60 * 60 * 1000);
-  return now <= deadline;
-}
-
-function getMaxActiveAppointments(item) {
-  return (item.max_active_appointments !== null && item.max_active_appointments !== undefined)
-    ? item.max_active_appointments
-    : 1;
-}
-
-function countActiveAppointments(phone, itemId) {
-  return db.prepare(
-    `SELECT COUNT(*) as cnt FROM appointments 
-     WHERE phone = ? AND item_id = ? AND status IN ('pending', 'arrived', 'calling')`
-  ).get(phone, itemId).cnt;
-}
+const getTodayStr = capacityService.getTodayStr.bind(capacityService);
+const isValidDate = capacityService.isValidDate.bind(capacityService);
+const isWorkday = capacityService.isWorkday.bind(capacityService);
+const getAppointmentStartTime = capacityService.getAppointmentStartTime.bind(capacityService);
+const getMaxAdvanceDate = capacityService.getMaxAdvanceDate.bind(capacityService);
+const isDateWithinAdvanceWeeks = capacityService.isDateWithinAdvanceWeeks.bind(capacityService);
+const isSameDayBookingAllowed = capacityService.isSameDayBookingAllowed.bind(capacityService);
+const isSameDayReschedulingAllowed = capacityService.isSameDayReschedulingAllowed.bind(capacityService);
+const getAppointmentDateTime = capacityService.getAppointmentDateTime.bind(capacityService);
+const isCancellationAllowed = capacityService.isCancellationAllowed.bind(capacityService);
+const isReschedulingAllowed = capacityService.isReschedulingAllowed.bind(capacityService);
+const getMaxActiveAppointments = capacityService.getMaxActiveAppointments.bind(capacityService);
+const countActiveAppointments = capacityService.countActiveAppointments.bind(capacityService);
 
 const sseClients = new Map();
 let sseClientIdCounter = 0;
@@ -704,20 +172,8 @@ app.post('/api/items', (req, res) => {
   });
 });
 
-function parseNullableInt(value, fallback) {
-  if (value === undefined) return fallback;
-  if (value === null || value === '') return null;
-  const parsed = parseInt(value);
-  return isNaN(parsed) ? null : parsed;
-}
-
-function parseNullableBool(value, fallback) {
-  if (value === undefined) return fallback;
-  if (value === null || value === '') return null;
-  if (value === true || value === 1 || value === '1') return 1;
-  if (value === false || value === 0 || value === '0') return 0;
-  return null;
-}
+const parseNullableInt = capacityService.parseNullableInt.bind(capacityService);
+const parseNullableBool = capacityService.parseNullableBool.bind(capacityService);
 
 app.put('/api/items/:id', (req, res) => {
   const { id } = req.params;
@@ -1527,37 +983,7 @@ app.get('/api/slots/:itemId/:date', (req, res) => {
   });
 });
 
-function generateTimeSlots(count) {
-  const slots = [];
-  const startTime = 9 * 60;
-  const endTime = 17 * 60;
-  const lunchStart = 12 * 60;
-  const lunchEnd = 13 * 60;
-
-  const morningMinutes = lunchStart - startTime;
-  const afternoonMinutes = endTime - lunchEnd;
-  const totalWorkMinutes = morningMinutes + afternoonMinutes;
-
-  const interval = Math.max(10, Math.floor(totalWorkMinutes / count));
-
-  let current = startTime;
-  while (current < lunchStart && slots.length < count) {
-    const hour = Math.floor(current / 60);
-    const minute = current % 60;
-    slots.push(`${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`);
-    current += interval;
-  }
-
-  current = lunchEnd;
-  while (current < endTime && slots.length < count) {
-    const hour = Math.floor(current / 60);
-    const minute = current % 60;
-    slots.push(`${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`);
-    current += interval;
-  }
-
-  return slots;
-}
+const generateTimeSlots = capacityService.generateTimeSlots.bind(capacityService);
 
 function validateAndCreateAppointment({
   item_id,
@@ -1592,38 +1018,12 @@ function validateAndCreateAppointment({
     }
   }
 
-  const dateObj = new Date(appointment_date);
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  if (dateObj < today) {
-    throw new Error('不能预约过去的日期');
-  }
-
   const item = db.prepare('SELECT * FROM items WHERE id = ?').get(item_id);
   if (!item) {
     throw new Error('事项不存在');
   }
 
-  const isToday = dateObj.getTime() === today.getTime();
-  if (isToday && !isSameDayBookingAllowed(item)) {
-    throw new Error('该事项不支持当天预约');
-  }
-
-  if (!isDateWithinAdvanceWeeks(appointment_date, item)) {
-    const maxDate = getMaxAdvanceDate(item);
-    const maxDateStr = maxDate.toISOString().split('T')[0];
-    throw new Error(`超出可预约范围，最远可预约至 ${maxDateStr}`);
-  }
-
-  if (!isWorkday(appointment_date)) {
-    throw new Error('该日期不可预约');
-  }
-
-  const maxActive = getMaxActiveAppointments(item);
-  const activeCount = countActiveAppointments(phone, item_id);
-  if (activeCount >= maxActive) {
-    throw new Error(`该手机号已有 ${activeCount} 个未完成的${item.name}预约，最多可同时有 ${maxActive} 个未完成预约，请先完成或取消后再预约`);
-  }
+  capacityService.validateBookingPreconditions({ item, phone, dateStr: appointment_date });
 
   const materials = db.prepare(
     'SELECT * FROM item_materials WHERE item_id = ? ORDER BY sort_order ASC, id ASC'
@@ -1646,27 +1046,118 @@ function validateAndCreateAppointment({
     }
   }
 
-  const slotCapacity = capacityService.validateTimeSlotCapacity(db, {
-    itemId: item_id,
-    date: appointment_date,
-    timeSlot: time_slot
-  });
-  const useTimeSlots = slotCapacity.use_time_slots;
-  const matchedTimeSlot = slotCapacity.matched_time_slot;
+  const { useTimeSlots, matchedSlot: matchedTimeSlot } = capacityService.validateTimeSlotAvailability(
+    item_id,
+    appointment_date,
+    time_slot
+  );
 
-  const windowAllocation = windowService.allocateWindow(db, {
-    itemId: item_id,
-    date: appointment_date,
-    requestedWindowId: window_id
-  });
-  const assignedWindowId = windowAllocation.window_id;
+  let assignedWindowId = null;
 
-  if (!windowAllocation.has_windows && !useTimeSlots) {
-    capacityService.validateDailyCapacity(db, {
-      itemId: item_id,
-      date: appointment_date,
-      defaultMax: item.default_max_count || 20
-    });
+  const allItemWindows = db.prepare(`
+    SELECT COUNT(*) as cnt
+    FROM item_windows iw
+    WHERE iw.item_id = ?
+  `).get(item_id).cnt;
+
+  if (allItemWindows > 0) {
+    if (window_id) {
+      const itemWindow = db.prepare(`
+        SELECT iw.*, w.name as window_name, w.status as window_status
+        FROM item_windows iw
+        LEFT JOIN windows w ON iw.window_id = w.id
+        WHERE iw.item_id = ? AND iw.window_id = ? AND w.status = 'active'
+      `).get(item_id, window_id);
+
+      if (!itemWindow) {
+        throw new Error('所选窗口不支持该事项或窗口不可用');
+      }
+
+      let ws = db.prepare(
+        'SELECT * FROM window_slots WHERE window_id = ? AND item_id = ? AND date = ?'
+      ).get(window_id, item_id, appointment_date);
+
+      if (!ws) {
+        const defaultCapacity = itemWindow.default_capacity || 10;
+        db.prepare(
+          'INSERT INTO window_slots (window_id, item_id, date, max_count, current_count) VALUES (?, ?, ?, ?, 0)'
+        ).run(window_id, item_id, appointment_date, defaultCapacity);
+        ws = db.prepare(
+          'SELECT * FROM window_slots WHERE window_id = ? AND item_id = ? AND date = ?'
+        ).get(window_id, item_id, appointment_date);
+      }
+
+      const windowUsed = db.prepare(
+        `SELECT COUNT(*) as cnt FROM appointments 
+         WHERE window_id = ? AND item_id = ? AND appointment_date = ? AND status NOT IN ('cancelled', 'no_show')`
+      ).get(window_id, item_id, appointment_date).cnt;
+
+      if (windowUsed >= ws.max_count) {
+        throw new Error('该窗口号源已满，请选择其他窗口或日期');
+      }
+
+      assignedWindowId = window_id;
+    } else {
+      const itemWindows = db.prepare(`
+        SELECT iw.*, w.name as window_name, w.status as window_status
+        FROM item_windows iw
+        LEFT JOIN windows w ON iw.window_id = w.id
+        WHERE iw.item_id = ? AND w.status = 'active'
+        ORDER BY w.sort_order ASC, w.id ASC
+      `).all(item_id);
+
+      if (itemWindows.length === 0) {
+        throw new Error('该事项暂无可用办理窗口');
+      }
+
+      let bestWindow = null;
+      let bestAvailable = -1;
+
+      for (const iw of itemWindows) {
+        let ws = db.prepare(
+          'SELECT * FROM window_slots WHERE window_id = ? AND item_id = ? AND date = ?'
+        ).get(iw.window_id, item_id, appointment_date);
+
+        if (!ws) {
+          const defaultCapacity = iw.default_capacity || 10;
+          db.prepare(
+            'INSERT INTO window_slots (window_id, item_id, date, max_count, current_count) VALUES (?, ?, ?, ?, 0)'
+          ).run(iw.window_id, item_id, appointment_date, defaultCapacity);
+          ws = db.prepare(
+            'SELECT * FROM window_slots WHERE window_id = ? AND item_id = ? AND date = ?'
+          ).get(iw.window_id, item_id, appointment_date);
+        }
+
+        const windowUsed = db.prepare(
+          `SELECT COUNT(*) as cnt FROM appointments 
+           WHERE window_id = ? AND item_id = ? AND appointment_date = ? AND status NOT IN ('cancelled', 'no_show')`
+        ).get(iw.window_id, item_id, appointment_date).cnt;
+
+        const available = ws.max_count - windowUsed;
+
+        if (available > 0 && available > bestAvailable) {
+          bestAvailable = available;
+          bestWindow = iw;
+        }
+      }
+
+      if (!bestWindow) {
+        throw new Error('所有窗口的号源均已满，请选择其他日期');
+      }
+
+      assignedWindowId = bestWindow.window_id;
+    }
+  } else if (!useTimeSlots) {
+    let dailySlot = db.prepare('SELECT * FROM daily_slots WHERE item_id = ? AND date = ?').get(item_id, appointment_date);
+    if (!dailySlot) {
+      const defaultMax = item.default_max_count || 20;
+      db.prepare('INSERT INTO daily_slots (item_id, date, max_count, current_count) VALUES (?, ?, ?, 0)').run(item_id, appointment_date, defaultMax);
+      dailySlot = db.prepare('SELECT * FROM daily_slots WHERE item_id = ? AND date = ?').get(item_id, appointment_date);
+    }
+
+    if (dailySlot.current_count >= dailySlot.max_count) {
+      throw new Error('该日期号源已满，请选择其他日期');
+    }
   }
 
   const todayCount = db.prepare(
@@ -1681,33 +1172,30 @@ function validateAndCreateAppointment({
 
     const appointmentId = result.lastInsertRowid;
 
-    capacityService.incrementAppointmentCapacity(db, {
-      itemId: item_id,
-      date: appointment_date,
-      windowId: assignedWindowId,
-      useTimeSlots,
-      matchedTimeSlot
-    });
+    if (useTimeSlots && matchedTimeSlot) {
+      db.prepare(
+        'UPDATE time_slot_capacities SET current_count = current_count + 1 WHERE id = ?'
+      ).run(matchedTimeSlot.id);
+    }
+
+    if (assignedWindowId) {
+      db.prepare(
+        'UPDATE window_slots SET current_count = current_count + 1 WHERE window_id = ? AND item_id = ? AND date = ?'
+      ).run(assignedWindowId, item_id, appointment_date);
+    } else if (!useTimeSlots) {
+      db.prepare('UPDATE daily_slots SET current_count = current_count + 1 WHERE item_id = ? AND date = ?').run(item_id, appointment_date);
+    }
 
     const itemName = item.name;
     const windowName = assignedWindowId ? 
       db.prepare('SELECT name FROM windows WHERE id = ?').get(assignedWindowId)?.name : '';
-    const reminderContent = generateReminderContent('created', {
+
+    reminderService.createAppointmentReminders(appointmentId, {
       item_name: itemName,
       window_name: windowName,
       appointment_date,
-      time_slot
-    });
-    createReminder(appointmentId, phone, 'created', reminderContent);
-    createPreAppointmentReminderPlans({
-      id: appointmentId,
-      item_id,
-      item_name: itemName,
-      window_id: assignedWindowId,
-      window_name: windowName,
-      phone,
-      appointment_date,
-      time_slot
+      time_slot,
+      phone
     });
 
     const snapshotStmt = db.prepare(
@@ -2337,9 +1825,34 @@ app.post('/api/appointments/:id/cancel', (req, res) => {
   }
 
   db.prepare('UPDATE appointments SET status = ? WHERE id = ?').run('cancelled', id);
-  cancelPendingReminderPlans(id);
 
-  capacityService.releaseAppointmentCapacity(db, appointment);
+  const timeSlotCap = db.prepare(`
+    SELECT * FROM time_slot_capacities 
+    WHERE item_id = ? AND date = ?
+  `).all(appointment.item_id, appointment.appointment_date);
+
+  const hasTimeSlots = timeSlotCap.length > 0;
+
+  if (hasTimeSlots) {
+    const matched = timeSlotCap.find(ts => 
+      appointment.time_slot === `${ts.start_time}-${ts.end_time}`
+    );
+    if (matched) {
+      db.prepare(
+        'UPDATE time_slot_capacities SET current_count = current_count - 1 WHERE id = ?'
+      ).run(matched.id);
+    }
+  }
+
+  if (appointment.window_id) {
+    db.prepare(
+      'UPDATE window_slots SET current_count = current_count - 1 WHERE window_id = ? AND item_id = ? AND date = ?'
+    ).run(appointment.window_id, appointment.item_id, appointment.appointment_date);
+  } else if (!hasTimeSlots) {
+    db.prepare(
+      'UPDATE daily_slots SET current_count = current_count - 1 WHERE item_id = ? AND date = ?'
+    ).run(appointment.item_id, appointment.appointment_date);
+  }
 
   const window = appointment.window_id ? 
     db.prepare('SELECT name FROM windows WHERE id = ?').get(appointment.window_id) : null;
@@ -2350,6 +1863,8 @@ app.post('/api/appointments/:id/cancel', (req, res) => {
     time_slot: appointment.time_slot
   });
   createReminder(id, appointment.phone, 'cancelled', reminderContent);
+
+  cancelPendingReminders(id);
 
   res.json({ success: true, message: '预约已取消，号源已释放' });
 
@@ -2400,121 +1915,38 @@ app.put('/api/appointments/:id/status', (req, res) => {
     db.prepare('UPDATE appointments SET status = ? WHERE id = ?').run(status, id);
   }
 
-  if (status !== 'pending') {
-    cancelPendingReminderPlans(id);
-  }
-
   const releaseStatuses = ['cancelled', 'no_show'];
   if (releaseStatuses.includes(status) && !releaseStatuses.includes(oldStatus)) {
-    const timeSlotCap = db.prepare(`
-      SELECT * FROM time_slot_capacities 
-      WHERE item_id = ? AND date = ?
-    `).all(appointment.item_id, appointment.appointment_date);
-
-    const hasTimeSlots = timeSlotCap.length > 0;
-
-    if (hasTimeSlots) {
-      const matched = timeSlotCap.find(ts => 
-        appointment.time_slot === `${ts.start_time}-${ts.end_time}`
-      );
-      if (matched) {
-        db.prepare(
-          'UPDATE time_slot_capacities SET current_count = current_count - 1 WHERE id = ?'
-        ).run(matched.id);
-      }
-    }
-
-    if (appointment.window_id) {
-      db.prepare(
-        'UPDATE window_slots SET current_count = current_count - 1 WHERE window_id = ? AND item_id = ? AND date = ?'
-      ).run(appointment.window_id, appointment.item_id, appointment.appointment_date);
-    } else if (!hasTimeSlots) {
-      db.prepare(
-        'UPDATE daily_slots SET current_count = current_count - 1 WHERE item_id = ? AND date = ?'
-      ).run(appointment.item_id, appointment.appointment_date);
-    }
+    capacityService.adjustSlotCountsOnRelease(appointment);
   }
 
   const restoreStatuses = ['cancelled', 'no_show'];
   if (restoreStatuses.includes(oldStatus) && !restoreStatuses.includes(status)) {
-    const timeSlotCap = db.prepare(`
-      SELECT * FROM time_slot_capacities 
-      WHERE item_id = ? AND date = ?
-    `).all(appointment.item_id, appointment.appointment_date);
-
-    const hasTimeSlots = timeSlotCap.length > 0;
-    let canRestore = true;
-
-    if (hasTimeSlots) {
-      const matched = timeSlotCap.find(ts => 
-        appointment.time_slot === `${ts.start_time}-${ts.end_time}`
-      );
-      if (matched) {
-        if (matched.current_count >= matched.max_count) {
-          canRestore = false;
-        }
-      }
-    }
-
-    if (appointment.window_id) {
-      const slot = db.prepare(
-        'SELECT * FROM window_slots WHERE window_id = ? AND item_id = ? AND date = ?'
-      ).get(appointment.window_id, appointment.item_id, appointment.appointment_date);
-      if (slot && slot.current_count >= slot.max_count) {
-        canRestore = false;
-      }
-    } else if (!hasTimeSlots) {
-      const slot = db.prepare('SELECT * FROM daily_slots WHERE item_id = ? AND date = ?').get(appointment.item_id, appointment.appointment_date);
-      if (slot && slot.current_count >= slot.max_count) {
-        canRestore = false;
-      }
-    }
-
-    if (!canRestore) {
+    const restoreResult = capacityService.adjustSlotCountsOnRestore(appointment);
+    if (!restoreResult.canRestore) {
       db.prepare('UPDATE appointments SET status = ? WHERE id = ?').run(oldStatus, id);
       return res.status(400).json({ error: '号源已满，无法恢复预约' });
     }
-
-    if (hasTimeSlots) {
-      const matched = timeSlotCap.find(ts => 
-        appointment.time_slot === `${ts.start_time}-${ts.end_time}`
-      );
-      if (matched) {
-        db.prepare(
-          'UPDATE time_slot_capacities SET current_count = current_count + 1 WHERE id = ?'
-        ).run(matched.id);
-      }
-    }
-
-    if (appointment.window_id) {
-      db.prepare(
-        'UPDATE window_slots SET current_count = current_count + 1 WHERE window_id = ? AND item_id = ? AND date = ?'
-      ).run(appointment.window_id, appointment.item_id, appointment.appointment_date);
-    } else if (!hasTimeSlots) {
-      db.prepare(
-        'UPDATE daily_slots SET current_count = current_count + 1 WHERE item_id = ? AND date = ?'
-      ).run(appointment.item_id, appointment.appointment_date);
-    }
   }
 
-  const reminderTypes = ['arrived', 'calling', 'completed', 'cancelled', 'no_show'];
-  if (reminderTypes.includes(status) && oldStatus !== status) {
+  if (oldStatus !== status) {
     const item = db.prepare('SELECT name FROM items WHERE id = ?').get(appointment.item_id);
     const window = appointment.window_id ?
       db.prepare('SELECT name FROM windows WHERE id = ?').get(appointment.window_id) : null;
-    const reminderContent = generateReminderContent(status, {
-      item_name: item ? item.name : '',
-      window_name: window ? window.name : '',
-      appointment_date: appointment.appointment_date,
-      time_slot: appointment.time_slot,
-      user_name: appointment.user_name,
-      queue_number: appointment.queue_number
-    });
-    createReminder(appointment.id, appointment.phone, status, reminderContent);
-  }
-
-  if (status === 'pending') {
-    createPreAppointmentReminderPlans(appointment);
+    reminderService.handleStatusChangeReminders(
+      appointment.id,
+      appointment.phone,
+      oldStatus,
+      status,
+      {
+        item_name: item ? item.name : '',
+        window_name: window ? window.name : '',
+        appointment_date: appointment.appointment_date,
+        time_slot: appointment.time_slot,
+        user_name: appointment.user_name,
+        queue_number: appointment.queue_number
+      }
+    );
   }
 
   let noShowCount = null;
@@ -2622,9 +2054,34 @@ app.post('/api/appointments/:id/no-show', (req, res) => {
   }
 
   db.prepare("UPDATE appointments SET status = 'no_show', no_show_at = CURRENT_TIMESTAMP WHERE id = ?").run(id);
-  cancelPendingReminderPlans(id);
 
-  capacityService.releaseAppointmentCapacity(db, appointment);
+  const timeSlotCap = db.prepare(`
+    SELECT * FROM time_slot_capacities 
+    WHERE item_id = ? AND date = ?
+  `).all(appointment.item_id, appointment.appointment_date);
+
+  const hasTimeSlots = timeSlotCap.length > 0;
+
+  if (hasTimeSlots) {
+    const matched = timeSlotCap.find(ts => 
+      appointment.time_slot === `${ts.start_time}-${ts.end_time}`
+    );
+    if (matched) {
+      db.prepare(
+        'UPDATE time_slot_capacities SET current_count = current_count - 1 WHERE id = ?'
+      ).run(matched.id);
+    }
+  }
+
+  if (appointment.window_id) {
+    db.prepare(
+      'UPDATE window_slots SET current_count = current_count - 1 WHERE window_id = ? AND item_id = ? AND date = ?'
+    ).run(appointment.window_id, appointment.item_id, appointment.appointment_date);
+  } else if (!hasTimeSlots) {
+    db.prepare(
+      'UPDATE daily_slots SET current_count = current_count - 1 WHERE item_id = ? AND date = ?'
+    ).run(appointment.item_id, appointment.appointment_date);
+  }
 
   const item = db.prepare('SELECT name FROM items WHERE id = ?').get(appointment.item_id);
   const window = appointment.window_id ?
@@ -2636,6 +2093,8 @@ app.post('/api/appointments/:id/no-show', (req, res) => {
     time_slot: appointment.time_slot
   });
   createReminder(appointment.id, appointment.phone, 'no_show', reminderContent);
+
+  cancelPendingReminders(appointment.id);
 
   const noShowCount = getNoShowCount(appointment.phone);
   const autoRestriction = checkAndAddAutoRestriction(appointment.phone, noShowCount);
@@ -2698,7 +2157,6 @@ app.put('/api/appointments/:id/no-show/revert', (req, res) => {
   }
 
   db.prepare("UPDATE appointments SET status = 'pending', no_show_at = NULL WHERE id = ?").run(id);
-  createPreAppointmentReminderPlans(appointment);
 
   if (hasTimeSlots) {
     const matched = timeSlotCap.find(ts => 
@@ -2740,10 +2198,7 @@ app.put('/api/appointments/:id/no-show/revert', (req, res) => {
   });
 });
 
-function parseSlotMaxCount(value) {
-  const parsed = parseInt(value, 10);
-  return Number.isInteger(parsed) ? parsed : NaN;
-}
+const parseSlotMaxCount = capacityService.parseSlotMaxCount.bind(capacityService);
 
 app.put('/api/slots/:itemId/:date/windows/max', (req, res) => {
   const { itemId, date } = req.params;
@@ -3073,234 +2528,20 @@ app.put('/api/slots/:itemId/:date/time-slots', (req, res) => {
   });
 });
 
-function getWeekdayFromDate(dateStr) {
-  const date = new Date(dateStr);
-  return date.getDay();
-}
-
-function hasManualDailySlot(itemId, date) {
-  const slot = db.prepare(
-    "SELECT id FROM daily_slots WHERE item_id = ? AND date = ? AND source_type = 'manual'"
-  ).get(itemId, date);
-  return !!slot;
-}
-
-function hasManualTimeSlots(itemId, date) {
-  const count = db.prepare(
-    "SELECT COUNT(*) as cnt FROM time_slot_capacities WHERE item_id = ? AND date = ? AND source_type = 'manual'"
-  ).get(itemId, date).cnt;
-  return count > 0;
-}
-
-function hasManualWindowSlots(itemId, date) {
-  const count = db.prepare(
-    "SELECT COUNT(*) as cnt FROM window_slots WHERE item_id = ? AND date = ? AND source_type = 'manual'"
-  ).get(itemId, date).cnt;
-  return count > 0;
-}
-
-function getWeeklyDailyTemplate(itemId, weekday) {
-  return db.prepare(
-    'SELECT * FROM weekly_daily_templates WHERE item_id = ? AND weekday = ?'
-  ).get(itemId, weekday);
-}
-
-function getWeeklyTimeSlotTemplates(itemId, weekday) {
-  return db.prepare(`
-    SELECT * FROM weekly_time_slot_templates 
-    WHERE item_id = ? AND weekday = ? 
-    ORDER BY sort_order ASC, start_time ASC
-  `).all(itemId, weekday);
-}
-
-function getWeeklyWindowTemplates(itemId, weekday) {
-  return db.prepare(`
-    SELECT wwt.*, w.name as window_name, w.status as window_status, w.sort_order
-    FROM weekly_window_templates wwt
-    LEFT JOIN windows w ON wwt.window_id = w.id
-    WHERE wwt.item_id = ? AND wwt.weekday = ?
-    ORDER BY w.sort_order ASC, w.id ASC
-  `).all(itemId, weekday);
-}
-
-function getActiveTimeSlotAppointmentCount(itemId, date, startTime, endTime) {
-  return capacityService.getActiveTimeSlotAppointmentCount(db, itemId, date, startTime, endTime);
-}
-
-function getActiveWindowAppointmentCount(itemId, windowId, date) {
-  return windowService.getActiveWindowAppointmentCount(db, itemId, windowId, date);
-}
-
-function syncGeneratedDailySlots(itemId, templates) {
-  const todayStr = getTodayStr();
-  const templateList = Array.isArray(templates) ? templates : [];
-
-  for (const t of templateList) {
-    const weekday = parseInt(t.weekday);
-    const maxCount = parseInt(t.max_count);
-    db.prepare(`
-      UPDATE daily_slots
-      SET max_count = CASE WHEN current_count > ? THEN current_count ELSE ? END
-      WHERE item_id = ? AND source_type = 'template' AND date >= ?
-        AND cast(strftime('%w', date) as integer) = ?
-    `).run(maxCount, maxCount, itemId, todayStr, weekday);
-  }
-}
-
-function clearGeneratedDailySlotsForWeekday(itemId, weekday) {
-  const todayStr = getTodayStr();
-  db.prepare(`
-    DELETE FROM daily_slots
-    WHERE item_id = ? AND source_type = 'template' AND date >= ? AND current_count = 0
-      AND cast(strftime('%w', date) as integer) = ?
-  `).run(itemId, todayStr, weekday);
-  db.prepare(`
-    UPDATE daily_slots
-    SET max_count = current_count
-    WHERE item_id = ? AND source_type = 'template' AND date >= ? AND current_count > 0
-      AND cast(strftime('%w', date) as integer) = ?
-  `).run(itemId, todayStr, weekday);
-}
-
-function syncGeneratedTimeSlotTemplates(itemId, weekday, templateSlots) {
-  const todayStr = getTodayStr();
-  const templateList = Array.isArray(templateSlots) ? templateSlots : [];
-  const templateMap = new Map(templateList.map((ts, index) => [
-    `${ts.start_time}-${ts.end_time}`,
-    {
-      start_time: ts.start_time,
-      end_time: ts.end_time,
-      max_count: parseInt(ts.max_count),
-      sort_order: ts.sort_order !== undefined ? parseInt(ts.sort_order) : index
-    }
-  ]));
-
-  const existingSlots = db.prepare(`
-    SELECT * FROM time_slot_capacities
-    WHERE item_id = ? AND source_type = 'template' AND date >= ?
-      AND cast(strftime('%w', date) as integer) = ?
-    ORDER BY date ASC, sort_order ASC, start_time ASC
-  `).all(itemId, todayStr, weekday);
-
-  const existingByDate = new Map();
-  for (const slot of existingSlots) {
-    if (!existingByDate.has(slot.date)) {
-      existingByDate.set(slot.date, []);
-    }
-    existingByDate.get(slot.date).push(slot);
-  }
-
-  for (const [date, slots] of existingByDate.entries()) {
-    const seenKeys = new Set();
-
-    for (const existing of slots) {
-      const key = `${existing.start_time}-${existing.end_time}`;
-      const activeCount = getActiveTimeSlotAppointmentCount(itemId, date, existing.start_time, existing.end_time);
-      const template = templateMap.get(key);
-
-      if (template) {
-        seenKeys.add(key);
-        const maxCount = Math.max(template.max_count, activeCount);
-        db.prepare(`
-          UPDATE time_slot_capacities
-          SET max_count = ?, current_count = ?, sort_order = ?, source_type = 'template'
-          WHERE id = ?
-        `).run(maxCount, activeCount, template.sort_order, existing.id);
-      } else if (activeCount > 0) {
-        db.prepare(`
-          UPDATE time_slot_capacities
-          SET max_count = ?, current_count = ?, source_type = 'template'
-          WHERE id = ?
-        `).run(activeCount, activeCount, existing.id);
-      } else {
-        db.prepare('DELETE FROM time_slot_capacities WHERE id = ?').run(existing.id);
-      }
-    }
-
-    for (const [key, template] of templateMap.entries()) {
-      if (seenKeys.has(key)) continue;
-      db.prepare(`
-        INSERT INTO time_slot_capacities
-        (item_id, date, start_time, end_time, max_count, current_count, sort_order, source_type)
-        VALUES (?, ?, ?, ?, ?, 0, ?, 'template')
-      `).run(itemId, date, template.start_time, template.end_time, template.max_count, template.sort_order);
-    }
-  }
-}
-
-function syncGeneratedWindowTemplates(itemId, weekdays) {
-  const todayStr = getTodayStr();
-  const weekdayList = [...new Set((weekdays || []).map(w => parseInt(w)).filter(w => !isNaN(w) && w >= 0 && w <= 6))];
-  if (weekdayList.length === 0) return;
-
-  const templateRows = db.prepare(`
-    SELECT * FROM weekly_window_templates
-    WHERE item_id = ? AND weekday IN (${weekdayList.map(() => '?').join(',')})
-  `).all(itemId, ...weekdayList);
-  const templateMap = new Map(templateRows.map(t => [`${t.weekday}:${t.window_id}`, t]));
-
-  const existingSlots = db.prepare(`
-    SELECT * FROM window_slots
-    WHERE item_id = ? AND source_type = 'template' AND date >= ?
-      AND cast(strftime('%w', date) as integer) IN (${weekdayList.map(() => '?').join(',')})
-    ORDER BY date ASC, window_id ASC
-  `).all(itemId, todayStr, ...weekdayList);
-
-  const existingByDate = new Map();
-  for (const slot of existingSlots) {
-    if (!existingByDate.has(slot.date)) {
-      existingByDate.set(slot.date, []);
-    }
-    existingByDate.get(slot.date).push(slot);
-  }
-
-  for (const [date, slots] of existingByDate.entries()) {
-    const weekday = getWeekdayFromDate(date);
-    const seenWindowIds = new Set();
-
-    for (const existing of slots) {
-      seenWindowIds.add(existing.window_id);
-      const template = templateMap.get(`${weekday}:${existing.window_id}`);
-      const activeCount = getActiveWindowAppointmentCount(itemId, existing.window_id, date);
-
-      if (template) {
-        const maxCount = Math.max(template.max_count, activeCount);
-        db.prepare(`
-          UPDATE window_slots
-          SET max_count = ?, current_count = ?, source_type = 'template'
-          WHERE id = ?
-        `).run(maxCount, activeCount, existing.id);
-      } else if (activeCount > 0) {
-        db.prepare(`
-          UPDATE window_slots
-          SET max_count = ?, current_count = ?, source_type = 'template'
-          WHERE id = ?
-        `).run(activeCount, activeCount, existing.id);
-      } else {
-        db.prepare('DELETE FROM window_slots WHERE id = ?').run(existing.id);
-      }
-    }
-
-    for (const template of templateRows.filter(t => t.weekday === weekday)) {
-      if (seenWindowIds.has(template.window_id)) continue;
-      const activeCount = getActiveWindowAppointmentCount(itemId, template.window_id, date);
-      db.prepare(`
-        INSERT INTO window_slots (window_id, item_id, date, max_count, current_count, source_type)
-        VALUES (?, ?, ?, ?, ?, 'template')
-      `).run(template.window_id, itemId, date, Math.max(template.max_count, activeCount), activeCount);
-    }
-  }
-}
-
-function getEffectiveWindowSlot(itemId, windowId, date, defaultCapacity) {
-  return windowService.getEffectiveWindowSlot(db, {
-    itemId,
-    windowId,
-    date,
-    defaultCapacity,
-    weekday: getWeekdayFromDate(date)
-  });
-}
+const getWeekdayFromDate = capacityService.getWeekdayFromDate.bind(capacityService);
+const hasManualDailySlot = capacityService.hasManualDailySlot.bind(capacityService);
+const hasManualTimeSlots = capacityService.hasManualTimeSlots.bind(capacityService);
+const hasManualWindowSlots = capacityService.hasManualWindowSlots.bind(capacityService);
+const getWeeklyDailyTemplate = capacityService.getWeeklyDailyTemplate.bind(capacityService);
+const getWeeklyTimeSlotTemplates = capacityService.getWeeklyTimeSlotTemplates.bind(capacityService);
+const getWeeklyWindowTemplates = capacityService.getWeeklyWindowTemplates.bind(capacityService);
+const getActiveTimeSlotAppointmentCount = capacityService.getActiveTimeSlotAppointmentCount.bind(capacityService);
+const getActiveWindowAppointmentCount = capacityService.getActiveWindowAppointmentCount.bind(capacityService);
+const syncGeneratedDailySlots = capacityService.syncGeneratedDailySlots.bind(capacityService);
+const clearGeneratedDailySlotsForWeekday = capacityService.clearGeneratedDailySlotsForWeekday.bind(capacityService);
+const syncGeneratedTimeSlotTemplates = capacityService.syncGeneratedTimeSlotTemplates.bind(capacityService);
+const syncGeneratedWindowTemplates = capacityService.syncGeneratedWindowTemplates.bind(capacityService);
+const getEffectiveWindowSlot = capacityService.getEffectiveWindowSlot.bind(capacityService);
 
 app.get('/api/items/:itemId/weekly-templates', (req, res) => {
   const { itemId } = req.params;
@@ -3673,7 +2914,7 @@ app.get('/api/reminders', (req, res) => {
   const { phone, date, type, send_status, page = 1, page_size = 20 } = req.query;
 
   let countSql = `SELECT COUNT(*) as total FROM appointment_reminders WHERE 1=1`;
-  let sql = `SELECT r.*, a.user_name, a.item_id, a.status as appointment_status, i.name as item_name, a.appointment_date, a.time_slot 
+  let sql = `SELECT r.*, a.user_name, a.item_id, i.name as item_name, a.appointment_date, a.time_slot 
              FROM appointment_reminders r 
              LEFT JOIN appointments a ON r.appointment_id = a.id
              LEFT JOIN items i ON a.item_id = i.id
@@ -3723,22 +2964,6 @@ app.get('/api/reminders', (req, res) => {
   });
 });
 
-app.post('/api/reminders/:id/send', (req, res) => {
-  const result = sendReminderNow(req.params.id);
-  if (result.error) {
-    return res.status(result.statusCode || 400).json({ error: result.error });
-  }
-  res.json({ success: true, reminder: result.reminder, message: '模拟发送成功' });
-});
-
-app.post('/api/reminders/:id/retry', (req, res) => {
-  const result = sendReminderNow(req.params.id);
-  if (result.error) {
-    return res.status(result.statusCode || 400).json({ error: result.error });
-  }
-  res.json({ success: true, reminder: result.reminder, message: '重试模拟发送成功' });
-});
-
 app.get('/api/reminders/latest', (req, res) => {
   const { phone, appointment_id } = req.query;
 
@@ -3747,7 +2972,7 @@ app.get('/api/reminders/latest', (req, res) => {
   }
 
   let sql = `
-    SELECT r.*, a.user_name, a.status as appointment_status, i.name as item_name, a.appointment_date, a.time_slot
+    SELECT r.*, a.user_name, i.name as item_name, a.appointment_date, a.time_slot, a.status as appointment_status
     FROM appointment_reminders r
     LEFT JOIN appointments a ON r.appointment_id = a.id
     LEFT JOIN items i ON a.item_id = i.id
@@ -3764,26 +2989,42 @@ app.get('/api/reminders/latest', (req, res) => {
     params.push(appointment_id);
   }
 
-  sql += `
-    ORDER BY
-      CASE
-        WHEN a.status = 'cancelled' AND r.type = 'cancelled' THEN 0
-        WHEN a.status = 'no_show' AND r.type = 'no_show' THEN 0
-        WHEN a.status = 'completed' AND r.type = 'completed' THEN 0
-        WHEN a.status = 'calling' AND r.type = 'calling' THEN 0
-        WHEN a.status = 'arrived' AND r.type = 'arrived' THEN 0
-        WHEN a.status = 'pending' AND r.send_status = 'pending' THEN 0
-        WHEN a.status = 'pending' AND r.type IN ('rescheduled', 'created') THEN 1
-        ELSE 2
-      END ASC,
-      CASE WHEN r.scheduled_for IS NULL THEN 1 ELSE 0 END ASC,
-      r.scheduled_for ASC,
-      r.created_at DESC,
-      r.id DESC
-    LIMIT 1
-  `;
+  sql += ' ORDER BY r.created_at DESC, r.id DESC LIMIT 1';
 
-  const reminder = db.prepare(sql).get(...params);
+  let reminder = db.prepare(sql).get(...params);
+
+  if (appointment_id && reminder) {
+    const appointment = db.prepare('SELECT status FROM appointments WHERE id = ?').get(appointment_id);
+    if (appointment) {
+      const priorityMap = {
+        pending: ['on_day', 'before_day', 'rescheduled', 'created'],
+        arrived: ['arrived', 'on_day', 'before_day', 'created'],
+        calling: ['calling', 'arrived', 'on_day', 'before_day'],
+        completed: ['completed', 'calling', 'arrived'],
+        cancelled: ['cancelled'],
+        no_show: ['no_show']
+      };
+
+      const priorities = priorityMap[appointment.status] || [];
+      const sentStatuses = ['simulated', 'sent'];
+
+      for (const type of priorities) {
+        const prioritySql = `
+          SELECT r.*, a.user_name, i.name as item_name, a.appointment_date, a.time_slot, a.status as appointment_status
+          FROM appointment_reminders r
+          LEFT JOIN appointments a ON r.appointment_id = a.id
+          LEFT JOIN items i ON a.item_id = i.id
+          WHERE r.appointment_id = ? AND r.type = ? AND r.send_status IN (?, ?)
+          ORDER BY r.created_at DESC, r.id DESC LIMIT 1
+        `;
+        const priorityReminder = db.prepare(prioritySql).get(appointment_id, type, sentStatuses[0], sentStatuses[1]);
+        if (priorityReminder) {
+          reminder = priorityReminder;
+          break;
+        }
+      }
+    }
+  }
 
   if (!reminder) {
     return res.status(404).json({ error: '暂无提醒记录' });
@@ -3796,19 +3037,33 @@ app.get('/api/appointments/:id/reminders', (req, res) => {
   const { id } = req.params;
 
   const reminders = db.prepare(`
-    SELECT r.*, a.status as appointment_status, i.name as item_name
+    SELECT r.*, i.name as item_name
     FROM appointment_reminders r
     LEFT JOIN appointments a ON r.appointment_id = a.id
     LEFT JOIN items i ON a.item_id = i.id
     WHERE r.appointment_id = ?
-    ORDER BY
-      CASE WHEN r.send_status = 'pending' THEN 0 ELSE 1 END,
-      r.scheduled_for ASC,
-      r.created_at DESC,
-      r.id DESC
+    ORDER BY r.created_at DESC, r.id DESC
   `).all(id);
 
   res.json(reminders);
+});
+
+app.post('/api/reminders/:id/send', (req, res) => {
+  const { id } = req.params;
+
+  try {
+    sendReminder(id);
+    const reminder = db.prepare(`
+      SELECT r.*, a.user_name, i.name as item_name, a.appointment_date, a.time_slot
+      FROM appointment_reminders r
+      LEFT JOIN appointments a ON r.appointment_id = a.id
+      LEFT JOIN items i ON a.item_id = i.id
+      WHERE r.id = ?
+    `).get(id);
+    res.json({ success: true, message: '提醒发送成功', reminder });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
 });
 
 app.get('/api/board/today', (req, res) => {
@@ -3944,7 +3199,6 @@ app.post('/api/appointments/:id/next', (req, res) => {
       db.prepare('UPDATE appointments SET status = ? WHERE id = ?').run('arrived', id);
     } else {
       db.prepare('UPDATE appointments SET status = ? WHERE id = ?').run('completed', id);
-      cancelPendingReminderPlans(id);
       const item = db.prepare('SELECT name FROM items WHERE id = ?').get(currentApt.item_id);
       const reminderContent = generateReminderContent('completed', {
         item_name: item ? item.name : '',
@@ -3954,6 +3208,7 @@ app.post('/api/appointments/:id/next', (req, res) => {
         queue_number: currentApt.queue_number
       });
       createReminder(currentApt.id, currentApt.phone, 'completed', reminderContent);
+      cancelPendingReminders(currentApt.id);
     }
 
     const nextApt = db.prepare(`
@@ -4719,32 +3974,106 @@ app.post('/api/appointments/:id/reschedule', (req, res) => {
     return res.status(400).json({ error: '新时段与原时段相同，无需改期' });
   }
 
-  let newSlotCapacity;
-  let newWindowAllocation;
-  try {
-    newSlotCapacity = capacityService.validateTimeSlotCapacity(db, {
-      itemId: appointment.item_id,
-      date: new_date,
-      timeSlot: new_time_slot
-    });
-    newWindowAllocation = windowService.allocateWindow(db, {
-      itemId: appointment.item_id,
-      date: new_date
-    });
-    if (!newWindowAllocation.has_windows && !newSlotCapacity.use_time_slots) {
-      capacityService.validateDailyCapacity(db, {
-        itemId: appointment.item_id,
-        date: new_date,
-        defaultMax: item.default_max_count || 20
-      });
+  const timeSlotCaps = db.prepare(`
+    SELECT * FROM time_slot_capacities 
+    WHERE item_id = ? AND date = ? 
+    ORDER BY sort_order ASC, start_time ASC
+  `).all(appointment.item_id, new_date);
+
+  let useTimeSlots = timeSlotCaps.length > 0;
+  let matchedNewTimeSlot = null;
+
+  if (useTimeSlots) {
+    for (const tsc of timeSlotCaps) {
+      if (new_time_slot === `${tsc.start_time}-${tsc.end_time}`) {
+        matchedNewTimeSlot = tsc;
+        break;
+      }
     }
-  } catch (e) {
-    return res.status(400).json({ error: e.message });
+    if (!matchedNewTimeSlot) {
+      return res.status(400).json({ error: '所选时段无效，请重新选择' });
+    }
+    if (matchedNewTimeSlot.current_count >= matchedNewTimeSlot.max_count) {
+      return res.status(400).json({ error: '该时段号源已满，请选择其他时段' });
+    }
+  } else {
+    const slotCheck = db.prepare(
+      `SELECT COUNT(*) as cnt FROM appointments 
+       WHERE item_id = ? AND appointment_date = ? AND time_slot = ? AND status NOT IN ('cancelled', 'no_show')`
+    ).get(appointment.item_id, new_date, new_time_slot);
+    if (slotCheck.cnt > 0) {
+      return res.status(400).json({ error: '该时段已被预约，请选择其他时段' });
+    }
   }
 
-  const useTimeSlots = newSlotCapacity.use_time_slots;
-  const matchedNewTimeSlot = newSlotCapacity.matched_time_slot;
-  const assignedNewWindowId = newWindowAllocation.window_id;
+  let assignedNewWindowId = null;
+
+  const allItemWindows = db.prepare(`
+    SELECT COUNT(*) as cnt
+    FROM item_windows iw
+    WHERE iw.item_id = ?
+  `).get(appointment.item_id).cnt;
+
+  if (allItemWindows > 0) {
+    const itemWindows = db.prepare(`
+      SELECT iw.*, w.name as window_name, w.status as window_status
+      FROM item_windows iw
+      LEFT JOIN windows w ON iw.window_id = w.id
+      WHERE iw.item_id = ? AND w.status = 'active'
+      ORDER BY w.sort_order ASC, w.id ASC
+    `).all(appointment.item_id);
+
+    if (itemWindows.length === 0) {
+      return res.status(400).json({ error: '该事项暂无可用办理窗口' });
+    }
+
+    let bestWindow = null;
+    let bestAvailable = -1;
+
+    for (const iw of itemWindows) {
+      let ws = db.prepare(
+        'SELECT * FROM window_slots WHERE window_id = ? AND item_id = ? AND date = ?'
+      ).get(iw.window_id, appointment.item_id, new_date);
+
+      if (!ws) {
+        const defaultCapacity = iw.default_capacity || 10;
+        db.prepare(
+          'INSERT INTO window_slots (window_id, item_id, date, max_count, current_count) VALUES (?, ?, ?, ?, 0)'
+        ).run(iw.window_id, appointment.item_id, new_date, defaultCapacity);
+        ws = db.prepare(
+          'SELECT * FROM window_slots WHERE window_id = ? AND item_id = ? AND date = ?'
+        ).get(iw.window_id, appointment.item_id, new_date);
+      }
+
+      const windowUsed = db.prepare(
+        `SELECT COUNT(*) as cnt FROM appointments 
+         WHERE window_id = ? AND item_id = ? AND appointment_date = ? AND status NOT IN ('cancelled', 'no_show')`
+      ).get(iw.window_id, appointment.item_id, new_date).cnt;
+
+      const available = ws.max_count - windowUsed;
+
+      if (available > 0 && available > bestAvailable) {
+        bestAvailable = available;
+        bestWindow = iw;
+      }
+    }
+
+    if (!bestWindow) {
+      return res.status(400).json({ error: '所有窗口的号源均已满，请选择其他日期' });
+    }
+
+    assignedNewWindowId = bestWindow.window_id;
+  } else if (!useTimeSlots) {
+    let dailySlot = db.prepare('SELECT * FROM daily_slots WHERE item_id = ? AND date = ?').get(appointment.item_id, new_date);
+    if (!dailySlot) {
+      const defaultMax = item.default_max_count || 20;
+      db.prepare('INSERT INTO daily_slots (item_id, date, max_count, current_count) VALUES (?, ?, ?, 0)').run(appointment.item_id, new_date, defaultMax);
+      dailySlot = db.prepare('SELECT * FROM daily_slots WHERE item_id = ? AND date = ?').get(appointment.item_id, new_date);
+    }
+    if (dailySlot.current_count >= dailySlot.max_count) {
+      return res.status(400).json({ error: '该日期号源已满，请选择其他日期' });
+    }
+  }
 
   const oldTimeSlotCap = db.prepare(`
     SELECT * FROM time_slot_capacities 
@@ -4764,18 +4093,34 @@ app.post('/api/appointments/:id/reschedule', (req, res) => {
       throw new Error('预约状态已变更，无法改期');
     }
 
-    if (hasOldTimeSlots && matchedOldTimeSlot && matchedOldTimeSlot.current_count <= 0) {
-      throw new Error('原时段号源计数异常');
+    if (hasOldTimeSlots && matchedOldTimeSlot) {
+      const newCount = matchedOldTimeSlot.current_count - 1;
+      if (newCount < 0) {
+        throw new Error('原时段号源计数异常');
+      }
+      db.prepare(
+        'UPDATE time_slot_capacities SET current_count = current_count - 1 WHERE id = ?'
+      ).run(matchedOldTimeSlot.id);
     }
 
-    capacityService.releaseAppointmentCapacity(db, appointment);
+    if (appointment.window_id) {
+      db.prepare(
+        'UPDATE window_slots SET current_count = current_count - 1 WHERE window_id = ? AND item_id = ? AND date = ?'
+      ).run(appointment.window_id, appointment.item_id, appointment.appointment_date);
+    } else if (!hasOldTimeSlots) {
+      db.prepare(
+        'UPDATE daily_slots SET current_count = current_count - 1 WHERE item_id = ? AND date = ?'
+      ).run(appointment.item_id, appointment.appointment_date);
+    }
 
     if (useTimeSlots && matchedNewTimeSlot) {
       const recheckSlot = db.prepare('SELECT * FROM time_slot_capacities WHERE id = ?').get(matchedNewTimeSlot.id);
       if (!recheckSlot || recheckSlot.current_count >= recheckSlot.max_count) {
         throw new Error('新时段号源已满，请重新选择');
       }
-      matchedNewTimeSlot.current_count = recheckSlot.current_count;
+      db.prepare(
+        'UPDATE time_slot_capacities SET current_count = current_count + 1 WHERE id = ?'
+      ).run(matchedNewTimeSlot.id);
     }
 
     if (assignedNewWindowId) {
@@ -4785,20 +4130,18 @@ app.post('/api/appointments/:id/reschedule', (req, res) => {
       if (!recheckSlot || recheckSlot.current_count >= recheckSlot.max_count) {
         throw new Error('新窗口号源已满，请重新选择');
       }
+      db.prepare(
+        'UPDATE window_slots SET current_count = current_count + 1 WHERE window_id = ? AND item_id = ? AND date = ?'
+      ).run(assignedNewWindowId, appointment.item_id, new_date);
     } else if (!useTimeSlots) {
       const recheckSlot = db.prepare('SELECT * FROM daily_slots WHERE item_id = ? AND date = ?').get(appointment.item_id, new_date);
       if (!recheckSlot || recheckSlot.current_count >= recheckSlot.max_count) {
         throw new Error('新日期号源已满，请重新选择');
       }
+      db.prepare(
+        'UPDATE daily_slots SET current_count = current_count + 1 WHERE item_id = ? AND date = ?'
+      ).run(appointment.item_id, new_date);
     }
-
-    capacityService.incrementAppointmentCapacity(db, {
-      itemId: appointment.item_id,
-      date: new_date,
-      windowId: assignedNewWindowId,
-      useTimeSlots,
-      matchedTimeSlot: matchedNewTimeSlot
-    });
 
     db.prepare(
       'UPDATE appointments SET appointment_date = ?, time_slot = ?, window_id = ? WHERE id = ?'
@@ -4819,17 +4162,21 @@ app.post('/api/appointments/:id/reschedule', (req, res) => {
     const itemName = item.name;
     const windowName = assignedNewWindowId ? 
       db.prepare('SELECT name FROM windows WHERE id = ?').get(assignedNewWindowId)?.name : '';
-    const rescheduleContent = `【预约改期】您的${itemName}预约已改期，新预约日期：${new_date} ${new_time_slot}${windowName ? '，办理窗口：' + windowName : ''}，请准时前往办理。`;
-    createReminder(id, phone, 'rescheduled', rescheduleContent);
-    createPreAppointmentReminderPlans({
-      id,
-      item_id: appointment.item_id,
+    const rescheduleContent = generateReminderContent('rescheduled', {
       item_name: itemName,
-      window_id: assignedNewWindowId,
       window_name: windowName,
-      phone,
       appointment_date: new_date,
       time_slot: new_time_slot
+    });
+    createReminder(id, phone, 'rescheduled', rescheduleContent);
+
+    cancelPendingReminders(id);
+    createScheduledReminders(id, {
+      item_name: itemName,
+      window_name: windowName,
+      appointment_date: new_date,
+      time_slot: new_time_slot,
+      phone
     });
 
     return { window_id: assignedNewWindowId, window_name: windowName };
@@ -5126,7 +4473,6 @@ app.post('/api/windows/:windowId/complete', (req, res) => {
   const item = db.prepare('SELECT name FROM items WHERE id = ?').get(currentApt.item_id);
 
   db.prepare('UPDATE appointments SET status = ? WHERE id = ?').run('completed', currentApt.id);
-  cancelPendingReminderPlans(currentApt.id);
 
   const reminderContent = generateReminderContent('completed', {
     item_name: item ? item.name : '',
@@ -5137,6 +4483,8 @@ app.post('/api/windows/:windowId/complete', (req, res) => {
     queue_number: currentApt.queue_number
   });
   createReminder(currentApt.id, currentApt.phone, 'completed', reminderContent);
+
+  cancelPendingReminders(currentApt.id);
 
   res.json({ success: true, message: '办理完成', completed_appointment: currentApt });
 
