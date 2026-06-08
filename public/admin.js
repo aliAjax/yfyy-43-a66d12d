@@ -108,8 +108,12 @@ function getSourceClass(source) {
 function getReminderTypeText(type) {
     const map = {
         created: '预约创建',
+        day_before: '预约前一天',
+        same_day: '预约当天',
+        rescheduled: '预约改期',
         cancelled: '预约取消',
         arrived: '已到场',
+        calling: '叫号提醒',
         completed: '办理完成',
         'no_show': '爽约提醒'
     };
@@ -119,8 +123,12 @@ function getReminderTypeText(type) {
 function getReminderTypeClass(type) {
     const map = {
         created: 'status-pending',
+        day_before: 'status-pending',
+        same_day: 'status-pending',
+        rescheduled: 'status-arrived',
         cancelled: 'status-cancelled',
         arrived: 'status-arrived',
+        calling: 'status-calling',
         completed: 'status-completed',
         'no_show': 'status-no_show'
     };
@@ -1511,7 +1519,7 @@ function renderReminders() {
     if (state.reminders.length === 0) {
         tbody.innerHTML = `
             <tr>
-                <td colspan="8" class="empty-state">
+                <td colspan="10" class="empty-state">
                     <div class="empty-icon">📱</div>
                     <p>暂无提醒记录</p>
                 </td>
@@ -1529,9 +1537,43 @@ function renderReminders() {
             <td><span class="status-badge ${getReminderTypeClass(reminder.type)}">${getReminderTypeText(reminder.type)}</span></td>
             <td><span class="status-badge ${getSendStatusClass(reminder.send_status)}">${getSendStatusText(reminder.send_status)}</span></td>
             <td style="max-width:300px;white-space:normal;">${escapeHtml(reminder.content)}</td>
-            <td>${reminder.created_at ? reminder.created_at.substring(0, 19) : '-'}</td>
+            <td>${reminder.scheduled_for ? reminder.scheduled_for.substring(0, 19) : '-'}</td>
+            <td>${reminder.sent_at ? reminder.sent_at.substring(0, 19) : (reminder.created_at ? reminder.created_at.substring(0, 19) : '-')}</td>
+            <td>${renderReminderActions(reminder)}</td>
         </tr>
     `).join('');
+}
+
+function renderReminderActions(reminder) {
+    if (reminder.send_status === 'pending') {
+        return `<button class="btn btn-sm btn-primary" onclick="sendReminder(${reminder.id})">发送</button>`;
+    }
+    if (reminder.send_status === 'failed') {
+        return `<button class="btn btn-sm btn-warning" onclick="retryReminder(${reminder.id})">重试</button>`;
+    }
+    return '-';
+}
+
+async function sendReminder(id) {
+    await triggerReminder(id, 'send');
+}
+
+async function retryReminder(id) {
+    await triggerReminder(id, 'retry');
+}
+
+async function triggerReminder(id, action) {
+    try {
+        const res = await fetch(`${API_BASE}/reminders/${id}/${action}`, { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok) {
+            alert(data.error || '操作失败');
+            return;
+        }
+        searchReminders();
+    } catch (e) {
+        alert('操作失败，请稍后重试');
+    }
 }
 
 function renderReminderPagination(totalPages) {
@@ -3678,6 +3720,8 @@ window.addMaterial = addMaterial;
 window.removeMaterial = removeMaterial;
 window.moveMaterial = moveMaterial;
 window.goToReminderPage = goToReminderPage;
+window.sendReminder = sendReminder;
+window.retryReminder = retryReminder;
 window.goToReviewPage = goToReviewPage;
 window.editRestriction = editRestriction;
 window.deleteRestriction = deleteRestriction;

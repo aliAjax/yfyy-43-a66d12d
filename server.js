@@ -66,6 +66,9 @@ db.exec(`
     type TEXT NOT NULL,
     content TEXT NOT NULL,
     send_status TEXT NOT NULL DEFAULT 'sent',
+    scheduled_for DATETIME,
+    sent_at DATETIME,
+    fail_reason TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (appointment_id) REFERENCES appointments(id)
   );
@@ -271,6 +274,21 @@ if (!hasOperatorName) {
   db.exec('ALTER TABLE appointments ADD COLUMN operator_name TEXT');
 }
 
+const reminderColumns = db.prepare("PRAGMA table_info(appointment_reminders)").all();
+const hasReminderScheduledFor = reminderColumns.some(c => c.name === 'scheduled_for');
+if (!hasReminderScheduledFor) {
+  db.exec('ALTER TABLE appointment_reminders ADD COLUMN scheduled_for DATETIME');
+}
+const hasReminderSentAt = reminderColumns.some(c => c.name === 'sent_at');
+if (!hasReminderSentAt) {
+  db.exec('ALTER TABLE appointment_reminders ADD COLUMN sent_at DATETIME');
+}
+const hasReminderFailReason = reminderColumns.some(c => c.name === 'fail_reason');
+if (!hasReminderFailReason) {
+  db.exec('ALTER TABLE appointment_reminders ADD COLUMN fail_reason TEXT');
+}
+db.exec('CREATE INDEX IF NOT EXISTS idx_reminders_status_schedule ON appointment_reminders(send_status, scheduled_for)');
+
 const itemColumns = db.prepare("PRAGMA table_info(items)").all();
 const hasAdvanceWeeks = itemColumns.some(c => c.name === 'advance_weeks');
 if (!hasAdvanceWeeks) {
@@ -439,11 +457,17 @@ function initDefaultData() {
 
 initDefaultData();
 
-function createReminder(appointmentId, phone, type, content) {
+function createReminder(appointmentId, phone, type, content, options = {}) {
+  const sendStatus = options.send_status || 'simulated';
+  const scheduledFor = options.scheduled_for || null;
+  const sentAt = options.sent_at || null;
+  const failReason = options.fail_reason || null;
   const stmt = db.prepare(
-    'INSERT INTO appointment_reminders (appointment_id, phone, type, content, send_status) VALUES (?, ?, ?, ?, ?)'
+    `INSERT INTO appointment_reminders
+     (appointment_id, phone, type, content, send_status, scheduled_for, sent_at, fail_reason)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
   );
-  const result = stmt.run(appointmentId, phone, type, content, 'simulated');
+  const result = stmt.run(appointmentId, phone, type, content, sendStatus, scheduledFor, sentAt, failReason);
   return result.lastInsertRowid;
 }
 
@@ -452,12 +476,93 @@ function generateReminderContent(type, appointment) {
   const templates = {
     created: `【预约成功】您的${appointment.item_name || '业务'}预约已成功，预约日期：${appointment.appointment_date} ${appointment.time_slot}${windowText}，请准时前往办理。`,
     cancelled: `【预约取消】您的${appointment.item_name || '业务'}预约已取消，预约日期：${appointment.appointment_date} ${appointment.time_slot}。`,
+    day_before: `【预约提醒】您预约的${appointment.item_name || '业务'}将于明天 ${appointment.appointment_date} ${appointment.time_slot}${windowText}办理，请提前准备材料。`,
+    same_day: `【预约提醒】您预约的${appointment.item_name || '业务'}将在今天 ${appointment.appointment_date} ${appointment.time_slot}${windowText}办理，请按时前往。`,
+    rescheduled: `【预约改期】您的${appointment.item_name || '业务'}预约已改期，新预约日期：${appointment.appointment_date} ${appointment.time_slot}${windowText}，请准时前往办理。`,
     arrived: `【到场提醒】您的${appointment.item_name || '业务'}预约已签到，请在休息区等待叫号。`,
     calling: `【叫号提醒】请${appointment.user_name || ''}顾客前往${appointment.window_name || appointment.item_name || '业务'}窗口办理，您的号码是${appointment.queue_number || ''}号。`,
     completed: `【办理完成】您的${appointment.item_name || '业务'}已办理完成，感谢您的配合。`,
     no_show: `【爽约提醒】您的${appointment.item_name || '业务'}预约（${appointment.appointment_date} ${appointment.time_slot}）已被标记为爽约，请按时前往办理，多次爽约将被限制预约。`
   };
   return templates[type] || '';
+}
+
+function getSqliteDateTime(date) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+function toDateAt(dateStr, hour = 9, minute = 0) {
+  const [year, month, day] = dateStr.split('-').map(Number);
+  return new Date(year, month - 1, day, hour, minute, 0, 0);
+}
+
+function addDays(date, days) {
+  const next = new Date(date.getTime());
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+function cancelPendingReminderPlans(appointmentId) {
+  return db.prepare(`
+    DELETE FROM appointment_reminders
+    WHERE appointment_id = ?
+      AND send_status = 'pending'
+      AND type IN ('day_before', 'same_day')
+  `).run(appointmentId).changes;
+}
+
+function createPreAppointmentReminderPlans(appointment) {
+  cancelPendingReminderPlans(appointment.id);
+
+  const item = appointment.item_name
+    ? { name: appointment.item_name }
+    : db.prepare('SELECT name FROM items WHERE id = ?').get(appointment.item_id);
+  const window = appointment.window_name
+    ? { name: appointment.window_name }
+    : (appointment.window_id ? db.prepare('SELECT name FROM windows WHERE id = ?').get(appointment.window_id) : null);
+  const base = {
+    item_name: item ? item.name : '',
+    window_name: window ? window.name : '',
+    appointment_date: appointment.appointment_date,
+    time_slot: appointment.time_slot
+  };
+
+  const appointmentDay = toDateAt(appointment.appointment_date, 9, 0);
+  const plans = [
+    { type: 'day_before', scheduled_for: getSqliteDateTime(addDays(appointmentDay, -1)) },
+    { type: 'same_day', scheduled_for: getSqliteDateTime(appointmentDay) }
+  ];
+
+  return plans.map(plan => createReminder(
+    appointment.id,
+    appointment.phone,
+    plan.type,
+    generateReminderContent(plan.type, base),
+    { send_status: 'pending', scheduled_for: plan.scheduled_for }
+  ));
+}
+
+function sendReminderNow(reminderId) {
+  const reminder = db.prepare('SELECT * FROM appointment_reminders WHERE id = ?').get(reminderId);
+  if (!reminder) {
+    return { error: '提醒记录不存在', statusCode: 404 };
+  }
+  if (!['pending', 'failed'].includes(reminder.send_status)) {
+    return { error: '只有待发送或发送失败的提醒可以触发发送', statusCode: 400 };
+  }
+
+  db.prepare(`
+    UPDATE appointment_reminders
+    SET send_status = 'simulated',
+        sent_at = CURRENT_TIMESTAMP,
+        fail_reason = NULL
+    WHERE id = ?
+  `).run(reminderId);
+
+  return {
+    reminder: db.prepare('SELECT * FROM appointment_reminders WHERE id = ?').get(reminderId)
+  };
 }
 
 function getTodayStr() {
@@ -1804,6 +1909,16 @@ function validateAndCreateAppointment({
       time_slot
     });
     createReminder(appointmentId, phone, 'created', reminderContent);
+    createPreAppointmentReminderPlans({
+      id: appointmentId,
+      item_id,
+      item_name: itemName,
+      window_id: assignedWindowId,
+      window_name: windowName,
+      phone,
+      appointment_date,
+      time_slot
+    });
 
     const snapshotStmt = db.prepare(
       'INSERT INTO appointment_material_snapshots (appointment_id, material_id, material_name, material_description, is_required, require_confirmation, is_confirmed, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
@@ -2432,6 +2547,7 @@ app.post('/api/appointments/:id/cancel', (req, res) => {
   }
 
   db.prepare('UPDATE appointments SET status = ? WHERE id = ?').run('cancelled', id);
+  cancelPendingReminderPlans(id);
 
   const timeSlotCap = db.prepare(`
     SELECT * FROM time_slot_capacities 
@@ -2518,6 +2634,10 @@ app.put('/api/appointments/:id/status', (req, res) => {
     db.prepare("UPDATE appointments SET status = 'no_show', no_show_at = CURRENT_TIMESTAMP WHERE id = ?").run(id);
   } else {
     db.prepare('UPDATE appointments SET status = ? WHERE id = ?').run(status, id);
+  }
+
+  if (status !== 'pending') {
+    cancelPendingReminderPlans(id);
   }
 
   const releaseStatuses = ['cancelled', 'no_show'];
@@ -2629,6 +2749,10 @@ app.put('/api/appointments/:id/status', (req, res) => {
     createReminder(appointment.id, appointment.phone, status, reminderContent);
   }
 
+  if (status === 'pending') {
+    createPreAppointmentReminderPlans(appointment);
+  }
+
   let noShowCount = null;
   let autoRestriction = null;
   let restrictionRemoved = false;
@@ -2734,6 +2858,7 @@ app.post('/api/appointments/:id/no-show', (req, res) => {
   }
 
   db.prepare("UPDATE appointments SET status = 'no_show', no_show_at = CURRENT_TIMESTAMP WHERE id = ?").run(id);
+  cancelPendingReminderPlans(id);
 
   const timeSlotCap = db.prepare(`
     SELECT * FROM time_slot_capacities 
@@ -2835,6 +2960,7 @@ app.put('/api/appointments/:id/no-show/revert', (req, res) => {
   }
 
   db.prepare("UPDATE appointments SET status = 'pending', no_show_at = NULL WHERE id = ?").run(id);
+  createPreAppointmentReminderPlans(appointment);
 
   if (hasTimeSlots) {
     const matched = timeSlotCap.find(ts => 
@@ -3858,7 +3984,7 @@ app.get('/api/reminders', (req, res) => {
   const { phone, date, type, send_status, page = 1, page_size = 20 } = req.query;
 
   let countSql = `SELECT COUNT(*) as total FROM appointment_reminders WHERE 1=1`;
-  let sql = `SELECT r.*, a.user_name, a.item_id, i.name as item_name, a.appointment_date, a.time_slot 
+  let sql = `SELECT r.*, a.user_name, a.item_id, a.status as appointment_status, i.name as item_name, a.appointment_date, a.time_slot 
              FROM appointment_reminders r 
              LEFT JOIN appointments a ON r.appointment_id = a.id
              LEFT JOIN items i ON a.item_id = i.id
@@ -3908,6 +4034,22 @@ app.get('/api/reminders', (req, res) => {
   });
 });
 
+app.post('/api/reminders/:id/send', (req, res) => {
+  const result = sendReminderNow(req.params.id);
+  if (result.error) {
+    return res.status(result.statusCode || 400).json({ error: result.error });
+  }
+  res.json({ success: true, reminder: result.reminder, message: '模拟发送成功' });
+});
+
+app.post('/api/reminders/:id/retry', (req, res) => {
+  const result = sendReminderNow(req.params.id);
+  if (result.error) {
+    return res.status(result.statusCode || 400).json({ error: result.error });
+  }
+  res.json({ success: true, reminder: result.reminder, message: '重试模拟发送成功' });
+});
+
 app.get('/api/reminders/latest', (req, res) => {
   const { phone, appointment_id } = req.query;
 
@@ -3916,7 +4058,7 @@ app.get('/api/reminders/latest', (req, res) => {
   }
 
   let sql = `
-    SELECT r.*, a.user_name, i.name as item_name, a.appointment_date, a.time_slot
+    SELECT r.*, a.user_name, a.status as appointment_status, i.name as item_name, a.appointment_date, a.time_slot
     FROM appointment_reminders r
     LEFT JOIN appointments a ON r.appointment_id = a.id
     LEFT JOIN items i ON a.item_id = i.id
@@ -3933,7 +4075,24 @@ app.get('/api/reminders/latest', (req, res) => {
     params.push(appointment_id);
   }
 
-  sql += ' ORDER BY r.created_at DESC, r.id DESC LIMIT 1';
+  sql += `
+    ORDER BY
+      CASE
+        WHEN a.status = 'cancelled' AND r.type = 'cancelled' THEN 0
+        WHEN a.status = 'no_show' AND r.type = 'no_show' THEN 0
+        WHEN a.status = 'completed' AND r.type = 'completed' THEN 0
+        WHEN a.status = 'calling' AND r.type = 'calling' THEN 0
+        WHEN a.status = 'arrived' AND r.type = 'arrived' THEN 0
+        WHEN a.status = 'pending' AND r.send_status = 'pending' THEN 0
+        WHEN a.status = 'pending' AND r.type IN ('rescheduled', 'created') THEN 1
+        ELSE 2
+      END ASC,
+      CASE WHEN r.scheduled_for IS NULL THEN 1 ELSE 0 END ASC,
+      r.scheduled_for ASC,
+      r.created_at DESC,
+      r.id DESC
+    LIMIT 1
+  `;
 
   const reminder = db.prepare(sql).get(...params);
 
@@ -3948,12 +4107,16 @@ app.get('/api/appointments/:id/reminders', (req, res) => {
   const { id } = req.params;
 
   const reminders = db.prepare(`
-    SELECT r.*, i.name as item_name
+    SELECT r.*, a.status as appointment_status, i.name as item_name
     FROM appointment_reminders r
     LEFT JOIN appointments a ON r.appointment_id = a.id
     LEFT JOIN items i ON a.item_id = i.id
     WHERE r.appointment_id = ?
-    ORDER BY r.created_at DESC, r.id DESC
+    ORDER BY
+      CASE WHEN r.send_status = 'pending' THEN 0 ELSE 1 END,
+      r.scheduled_for ASC,
+      r.created_at DESC,
+      r.id DESC
   `).all(id);
 
   res.json(reminders);
@@ -4092,6 +4255,7 @@ app.post('/api/appointments/:id/next', (req, res) => {
       db.prepare('UPDATE appointments SET status = ? WHERE id = ?').run('arrived', id);
     } else {
       db.prepare('UPDATE appointments SET status = ? WHERE id = ?').run('completed', id);
+      cancelPendingReminderPlans(id);
       const item = db.prepare('SELECT name FROM items WHERE id = ?').get(currentApt.item_id);
       const reminderContent = generateReminderContent('completed', {
         item_name: item ? item.name : '',
@@ -5056,6 +5220,16 @@ app.post('/api/appointments/:id/reschedule', (req, res) => {
       db.prepare('SELECT name FROM windows WHERE id = ?').get(assignedNewWindowId)?.name : '';
     const rescheduleContent = `【预约改期】您的${itemName}预约已改期，新预约日期：${new_date} ${new_time_slot}${windowName ? '，办理窗口：' + windowName : ''}，请准时前往办理。`;
     createReminder(id, phone, 'rescheduled', rescheduleContent);
+    createPreAppointmentReminderPlans({
+      id,
+      item_id: appointment.item_id,
+      item_name: itemName,
+      window_id: assignedNewWindowId,
+      window_name: windowName,
+      phone,
+      appointment_date: new_date,
+      time_slot: new_time_slot
+    });
 
     return { window_id: assignedNewWindowId, window_name: windowName };
   });
@@ -5351,6 +5525,7 @@ app.post('/api/windows/:windowId/complete', (req, res) => {
   const item = db.prepare('SELECT name FROM items WHERE id = ?').get(currentApt.item_id);
 
   db.prepare('UPDATE appointments SET status = ? WHERE id = ?').run('completed', currentApt.id);
+  cancelPendingReminderPlans(currentApt.id);
 
   const reminderContent = generateReminderContent('completed', {
     item_name: item ? item.name : '',

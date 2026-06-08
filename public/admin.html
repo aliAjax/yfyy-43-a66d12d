@@ -507,9 +507,14 @@
                             <select id="filterReminderType">
                                 <option value="">全部类型</option>
                                 <option value="created">预约创建</option>
+                                <option value="day_before">预约前一天</option>
+                                <option value="same_day">预约当天</option>
+                                <option value="rescheduled">预约改期</option>
                                 <option value="cancelled">预约取消</option>
                                 <option value="arrived">已到场</option>
+                                <option value="calling">叫号提醒</option>
                                 <option value="completed">办理完成</option>
+                                <option value="no_show">爽约提醒</option>
                             </select>
                         </div>
                         <div class="filter-item">
@@ -539,11 +544,13 @@
                                     <th>提醒类型</th>
                                     <th>发送状态</th>
                                     <th>提醒内容</th>
+                                    <th>计划发送</th>
                                     <th>发送时间</th>
+                                    <th>操作</th>
                                 </tr>
                             </thead>
                             <tbody id="reminderList">
-                                <tr><td colspan="8" class="loading">加载中...</td></tr>
+                                <tr><td colspan="10" class="loading">加载中...</td></tr>
                             </tbody>
                         </table>
                     </div>
