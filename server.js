@@ -3410,8 +3410,10 @@ app.put('/api/items/:itemId/weekly-templates/daily', (req, res) => {
   }
 
   const tx = db.transaction(() => {
-    db.prepare('DELETE FROM weekly_daily_templates WHERE item_id = ?').run(itemId);
-    db.prepare('DELETE FROM weekly_time_slot_templates WHERE item_id = ?').run(itemId);
+    for (const t of templates) {
+      const weekday = parseInt(t.weekday);
+      db.prepare('DELETE FROM weekly_daily_templates WHERE item_id = ? AND weekday = ?').run(itemId, weekday);
+    }
 
     const insertStmt = db.prepare(`
       INSERT INTO weekly_daily_templates (item_id, weekday, max_count)
@@ -3421,6 +3423,12 @@ app.put('/api/items/:itemId/weekly-templates/daily', (req, res) => {
     for (const t of templates) {
       insertStmt.run(itemId, parseInt(t.weekday), parseInt(t.max_count));
     }
+
+    const todayStr = new Date().toISOString().split('T')[0];
+    db.prepare(`
+      DELETE FROM daily_slots 
+      WHERE item_id = ? AND source_type = 'template' AND date >= ? AND current_count = 0
+    `).run(itemId, todayStr);
   });
 
   try {
@@ -3503,6 +3511,13 @@ app.put('/api/items/:itemId/weekly-templates/time-slots/:weekday', (req, res) =>
     sortedSlots.forEach((ts, index) => {
       insertStmt.run(itemId, weekdayNum, ts.start_time, ts.end_time, parseInt(ts.max_count), index);
     });
+
+    const todayStr = new Date().toISOString().split('T')[0];
+    db.prepare(`
+      DELETE FROM time_slot_capacities 
+      WHERE item_id = ? AND source_type = 'template' AND date >= ? AND current_count = 0
+        AND cast(strftime('%w', date) as integer) = ?
+    `).run(itemId, todayStr, weekdayNum);
   });
 
   try {
@@ -3574,6 +3589,14 @@ app.put('/api/items/:itemId/weekly-templates/windows', (req, res) => {
     for (const t of templates) {
       insertStmt.run(itemId, parseInt(t.window_id), parseInt(t.weekday), parseInt(t.max_count));
     }
+
+    const todayStr = new Date().toISOString().split('T')[0];
+    const weekdayPlaceholders = weekdays.map(() => '?').join(',');
+    db.prepare(`
+      DELETE FROM window_slots 
+      WHERE item_id = ? AND source_type = 'template' AND date >= ? AND current_count = 0
+        AND cast(strftime('%w', date) as integer) IN (${weekdayPlaceholders})
+    `).run(itemId, todayStr, ...weekdays);
   });
 
   try {
@@ -3610,6 +3633,13 @@ app.delete('/api/items/:itemId/weekly-templates/daily/:weekday', (req, res) => {
     'DELETE FROM weekly_daily_templates WHERE item_id = ? AND weekday = ?'
   ).run(itemId, weekdayNum);
 
+  const todayStr = new Date().toISOString().split('T')[0];
+  db.prepare(`
+    DELETE FROM daily_slots 
+    WHERE item_id = ? AND source_type = 'template' AND date >= ? AND current_count = 0
+      AND cast(strftime('%w', date) as integer) = ?
+  `).run(itemId, todayStr, weekdayNum);
+
   res.json({ success: true });
 });
 
@@ -3630,6 +3660,13 @@ app.delete('/api/items/:itemId/weekly-templates/time-slots/:weekday', (req, res)
     'DELETE FROM weekly_time_slot_templates WHERE item_id = ? AND weekday = ?'
   ).run(itemId, weekdayNum);
 
+  const todayStr = new Date().toISOString().split('T')[0];
+  db.prepare(`
+    DELETE FROM time_slot_capacities 
+    WHERE item_id = ? AND source_type = 'template' AND date >= ? AND current_count = 0
+      AND cast(strftime('%w', date) as integer) = ?
+  `).run(itemId, todayStr, weekdayNum);
+
   res.json({ success: true });
 });
 
@@ -3649,6 +3686,13 @@ app.delete('/api/items/:itemId/weekly-templates/windows/:weekday', (req, res) =>
   db.prepare(
     'DELETE FROM weekly_window_templates WHERE item_id = ? AND weekday = ?'
   ).run(itemId, weekdayNum);
+
+  const todayStr = new Date().toISOString().split('T')[0];
+  db.prepare(`
+    DELETE FROM window_slots 
+    WHERE item_id = ? AND source_type = 'template' AND date >= ? AND current_count = 0
+      AND cast(strftime('%w', date) as integer) = ?
+  `).run(itemId, todayStr, weekdayNum);
 
   res.json({ success: true });
 });
