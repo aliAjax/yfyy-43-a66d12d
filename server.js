@@ -2,6 +2,9 @@ const express = require('express');
 const cors = require('cors');
 const Database = require('better-sqlite3');
 const path = require('path');
+const reminderService = require('./services/reminderService');
+const windowService = require('./services/windowService');
+const capacityService = require('./services/capacityService');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -459,111 +462,23 @@ function initDefaultData() {
 initDefaultData();
 
 function createReminder(appointmentId, phone, type, content, options = {}) {
-  const sendStatus = options.send_status || 'simulated';
-  const scheduledFor = options.scheduled_for || null;
-  const sentAt = options.sent_at || null;
-  const failReason = options.fail_reason || null;
-  const stmt = db.prepare(
-    `INSERT INTO appointment_reminders
-     (appointment_id, phone, type, content, send_status, scheduled_for, sent_at, fail_reason)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-  );
-  const result = stmt.run(appointmentId, phone, type, content, sendStatus, scheduledFor, sentAt, failReason);
-  return result.lastInsertRowid;
+  return reminderService.createReminder(db, appointmentId, phone, type, content, options);
 }
 
 function generateReminderContent(type, appointment) {
-  const windowText = appointment.window_name ? `，办理窗口：${appointment.window_name}` : '';
-  const templates = {
-    created: `【预约成功】您的${appointment.item_name || '业务'}预约已成功，预约日期：${appointment.appointment_date} ${appointment.time_slot}${windowText}，请准时前往办理。`,
-    cancelled: `【预约取消】您的${appointment.item_name || '业务'}预约已取消，预约日期：${appointment.appointment_date} ${appointment.time_slot}。`,
-    day_before: `【预约提醒】您预约的${appointment.item_name || '业务'}将于明天 ${appointment.appointment_date} ${appointment.time_slot}${windowText}办理，请提前准备材料。`,
-    same_day: `【预约提醒】您预约的${appointment.item_name || '业务'}将在今天 ${appointment.appointment_date} ${appointment.time_slot}${windowText}办理，请按时前往。`,
-    rescheduled: `【预约改期】您的${appointment.item_name || '业务'}预约已改期，新预约日期：${appointment.appointment_date} ${appointment.time_slot}${windowText}，请准时前往办理。`,
-    arrived: `【到场提醒】您的${appointment.item_name || '业务'}预约已签到，请在休息区等待叫号。`,
-    calling: `【叫号提醒】请${appointment.user_name || ''}顾客前往${appointment.window_name || appointment.item_name || '业务'}窗口办理，您的号码是${appointment.queue_number || ''}号。`,
-    completed: `【办理完成】您的${appointment.item_name || '业务'}已办理完成，感谢您的配合。`,
-    no_show: `【爽约提醒】您的${appointment.item_name || '业务'}预约（${appointment.appointment_date} ${appointment.time_slot}）已被标记为爽约，请按时前往办理，多次爽约将被限制预约。`
-  };
-  return templates[type] || '';
-}
-
-function getSqliteDateTime(date) {
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
-}
-
-function toDateAt(dateStr, hour = 9, minute = 0) {
-  const [year, month, day] = dateStr.split('-').map(Number);
-  return new Date(year, month - 1, day, hour, minute, 0, 0);
-}
-
-function addDays(date, days) {
-  const next = new Date(date.getTime());
-  next.setDate(next.getDate() + days);
-  return next;
+  return reminderService.generateReminderContent(type, appointment);
 }
 
 function cancelPendingReminderPlans(appointmentId) {
-  return db.prepare(`
-    DELETE FROM appointment_reminders
-    WHERE appointment_id = ?
-      AND send_status = 'pending'
-      AND type IN ('day_before', 'same_day')
-  `).run(appointmentId).changes;
+  return reminderService.cancelPendingReminderPlans(db, appointmentId);
 }
 
 function createPreAppointmentReminderPlans(appointment) {
-  cancelPendingReminderPlans(appointment.id);
-
-  const item = appointment.item_name
-    ? { name: appointment.item_name }
-    : db.prepare('SELECT name FROM items WHERE id = ?').get(appointment.item_id);
-  const window = appointment.window_name
-    ? { name: appointment.window_name }
-    : (appointment.window_id ? db.prepare('SELECT name FROM windows WHERE id = ?').get(appointment.window_id) : null);
-  const base = {
-    item_name: item ? item.name : '',
-    window_name: window ? window.name : '',
-    appointment_date: appointment.appointment_date,
-    time_slot: appointment.time_slot
-  };
-
-  const appointmentDay = toDateAt(appointment.appointment_date, 9, 0);
-  const plans = [
-    { type: 'day_before', scheduled_for: getSqliteDateTime(addDays(appointmentDay, -1)) },
-    { type: 'same_day', scheduled_for: getSqliteDateTime(appointmentDay) }
-  ];
-
-  return plans.map(plan => createReminder(
-    appointment.id,
-    appointment.phone,
-    plan.type,
-    generateReminderContent(plan.type, base),
-    { send_status: 'pending', scheduled_for: plan.scheduled_for }
-  ));
+  return reminderService.createPreAppointmentReminderPlans(db, appointment);
 }
 
 function sendReminderNow(reminderId) {
-  const reminder = db.prepare('SELECT * FROM appointment_reminders WHERE id = ?').get(reminderId);
-  if (!reminder) {
-    return { error: '提醒记录不存在', statusCode: 404 };
-  }
-  if (!['pending', 'failed'].includes(reminder.send_status)) {
-    return { error: '只有待发送或发送失败的提醒可以触发发送', statusCode: 400 };
-  }
-
-  db.prepare(`
-    UPDATE appointment_reminders
-    SET send_status = 'simulated',
-        sent_at = CURRENT_TIMESTAMP,
-        fail_reason = NULL
-    WHERE id = ?
-  `).run(reminderId);
-
-  return {
-    reminder: db.prepare('SELECT * FROM appointment_reminders WHERE id = ?').get(reminderId)
-  };
+  return reminderService.sendReminderNow(db, reminderId);
 }
 
 function getTodayStr() {
@@ -1731,147 +1646,27 @@ function validateAndCreateAppointment({
     }
   }
 
-  const timeSlotCaps = db.prepare(`
-    SELECT * FROM time_slot_capacities 
-    WHERE item_id = ? AND date = ? 
-    ORDER BY sort_order ASC, start_time ASC
-  `).all(item_id, appointment_date);
+  const slotCapacity = capacityService.validateTimeSlotCapacity(db, {
+    itemId: item_id,
+    date: appointment_date,
+    timeSlot: time_slot
+  });
+  const useTimeSlots = slotCapacity.use_time_slots;
+  const matchedTimeSlot = slotCapacity.matched_time_slot;
 
-  let useTimeSlots = timeSlotCaps.length > 0;
-  let matchedTimeSlot = null;
+  const windowAllocation = windowService.allocateWindow(db, {
+    itemId: item_id,
+    date: appointment_date,
+    requestedWindowId: window_id
+  });
+  const assignedWindowId = windowAllocation.window_id;
 
-  if (useTimeSlots) {
-    for (const tsc of timeSlotCaps) {
-      if (time_slot === `${tsc.start_time}-${tsc.end_time}`) {
-        matchedTimeSlot = tsc;
-        break;
-      }
-    }
-
-    if (!matchedTimeSlot) {
-      throw new Error('所选时段无效，请重新选择');
-    }
-
-    if (matchedTimeSlot.current_count >= matchedTimeSlot.max_count) {
-      throw new Error('该时段号源已满，请选择其他时段');
-    }
-  } else {
-    const slotCheck = db.prepare(
-      `SELECT COUNT(*) as cnt FROM appointments 
-       WHERE item_id = ? AND appointment_date = ? AND time_slot = ? AND status NOT IN ('cancelled', 'no_show')`
-    ).get(item_id, appointment_date, time_slot);
-
-    if (slotCheck.cnt > 0) {
-      throw new Error('该时段已被预约，请选择其他时段');
-    }
-  }
-
-  let assignedWindowId = null;
-
-  const allItemWindows = db.prepare(`
-    SELECT COUNT(*) as cnt
-    FROM item_windows iw
-    WHERE iw.item_id = ?
-  `).get(item_id).cnt;
-
-  if (allItemWindows > 0) {
-    if (window_id) {
-      const itemWindow = db.prepare(`
-        SELECT iw.*, w.name as window_name, w.status as window_status
-        FROM item_windows iw
-        LEFT JOIN windows w ON iw.window_id = w.id
-        WHERE iw.item_id = ? AND iw.window_id = ? AND w.status = 'active'
-      `).get(item_id, window_id);
-
-      if (!itemWindow) {
-        throw new Error('所选窗口不支持该事项或窗口不可用');
-      }
-
-      let ws = db.prepare(
-        'SELECT * FROM window_slots WHERE window_id = ? AND item_id = ? AND date = ?'
-      ).get(window_id, item_id, appointment_date);
-
-      if (!ws) {
-        const defaultCapacity = itemWindow.default_capacity || 10;
-        db.prepare(
-          'INSERT INTO window_slots (window_id, item_id, date, max_count, current_count) VALUES (?, ?, ?, ?, 0)'
-        ).run(window_id, item_id, appointment_date, defaultCapacity);
-        ws = db.prepare(
-          'SELECT * FROM window_slots WHERE window_id = ? AND item_id = ? AND date = ?'
-        ).get(window_id, item_id, appointment_date);
-      }
-
-      const windowUsed = db.prepare(
-        `SELECT COUNT(*) as cnt FROM appointments 
-         WHERE window_id = ? AND item_id = ? AND appointment_date = ? AND status NOT IN ('cancelled', 'no_show')`
-      ).get(window_id, item_id, appointment_date).cnt;
-
-      if (windowUsed >= ws.max_count) {
-        throw new Error('该窗口号源已满，请选择其他窗口或日期');
-      }
-
-      assignedWindowId = window_id;
-    } else {
-      const itemWindows = db.prepare(`
-        SELECT iw.*, w.name as window_name, w.status as window_status
-        FROM item_windows iw
-        LEFT JOIN windows w ON iw.window_id = w.id
-        WHERE iw.item_id = ? AND w.status = 'active'
-        ORDER BY w.sort_order ASC, w.id ASC
-      `).all(item_id);
-
-      if (itemWindows.length === 0) {
-        throw new Error('该事项暂无可用办理窗口');
-      }
-
-      let bestWindow = null;
-      let bestAvailable = -1;
-
-      for (const iw of itemWindows) {
-        let ws = db.prepare(
-          'SELECT * FROM window_slots WHERE window_id = ? AND item_id = ? AND date = ?'
-        ).get(iw.window_id, item_id, appointment_date);
-
-        if (!ws) {
-          const defaultCapacity = iw.default_capacity || 10;
-          db.prepare(
-            'INSERT INTO window_slots (window_id, item_id, date, max_count, current_count) VALUES (?, ?, ?, ?, 0)'
-          ).run(iw.window_id, item_id, appointment_date, defaultCapacity);
-          ws = db.prepare(
-            'SELECT * FROM window_slots WHERE window_id = ? AND item_id = ? AND date = ?'
-          ).get(iw.window_id, item_id, appointment_date);
-        }
-
-        const windowUsed = db.prepare(
-          `SELECT COUNT(*) as cnt FROM appointments 
-           WHERE window_id = ? AND item_id = ? AND appointment_date = ? AND status NOT IN ('cancelled', 'no_show')`
-        ).get(iw.window_id, item_id, appointment_date).cnt;
-
-        const available = ws.max_count - windowUsed;
-
-        if (available > 0 && available > bestAvailable) {
-          bestAvailable = available;
-          bestWindow = iw;
-        }
-      }
-
-      if (!bestWindow) {
-        throw new Error('所有窗口的号源均已满，请选择其他日期');
-      }
-
-      assignedWindowId = bestWindow.window_id;
-    }
-  } else if (!useTimeSlots) {
-    let dailySlot = db.prepare('SELECT * FROM daily_slots WHERE item_id = ? AND date = ?').get(item_id, appointment_date);
-    if (!dailySlot) {
-      const defaultMax = item.default_max_count || 20;
-      db.prepare('INSERT INTO daily_slots (item_id, date, max_count, current_count) VALUES (?, ?, ?, 0)').run(item_id, appointment_date, defaultMax);
-      dailySlot = db.prepare('SELECT * FROM daily_slots WHERE item_id = ? AND date = ?').get(item_id, appointment_date);
-    }
-
-    if (dailySlot.current_count >= dailySlot.max_count) {
-      throw new Error('该日期号源已满，请选择其他日期');
-    }
+  if (!windowAllocation.has_windows && !useTimeSlots) {
+    capacityService.validateDailyCapacity(db, {
+      itemId: item_id,
+      date: appointment_date,
+      defaultMax: item.default_max_count || 20
+    });
   }
 
   const todayCount = db.prepare(
@@ -1886,19 +1681,13 @@ function validateAndCreateAppointment({
 
     const appointmentId = result.lastInsertRowid;
 
-    if (useTimeSlots && matchedTimeSlot) {
-      db.prepare(
-        'UPDATE time_slot_capacities SET current_count = current_count + 1 WHERE id = ?'
-      ).run(matchedTimeSlot.id);
-    }
-
-    if (assignedWindowId) {
-      db.prepare(
-        'UPDATE window_slots SET current_count = current_count + 1 WHERE window_id = ? AND item_id = ? AND date = ?'
-      ).run(assignedWindowId, item_id, appointment_date);
-    } else if (!useTimeSlots) {
-      db.prepare('UPDATE daily_slots SET current_count = current_count + 1 WHERE item_id = ? AND date = ?').run(item_id, appointment_date);
-    }
+    capacityService.incrementAppointmentCapacity(db, {
+      itemId: item_id,
+      date: appointment_date,
+      windowId: assignedWindowId,
+      useTimeSlots,
+      matchedTimeSlot
+    });
 
     const itemName = item.name;
     const windowName = assignedWindowId ? 
@@ -2550,33 +2339,7 @@ app.post('/api/appointments/:id/cancel', (req, res) => {
   db.prepare('UPDATE appointments SET status = ? WHERE id = ?').run('cancelled', id);
   cancelPendingReminderPlans(id);
 
-  const timeSlotCap = db.prepare(`
-    SELECT * FROM time_slot_capacities 
-    WHERE item_id = ? AND date = ?
-  `).all(appointment.item_id, appointment.appointment_date);
-
-  const hasTimeSlots = timeSlotCap.length > 0;
-
-  if (hasTimeSlots) {
-    const matched = timeSlotCap.find(ts => 
-      appointment.time_slot === `${ts.start_time}-${ts.end_time}`
-    );
-    if (matched) {
-      db.prepare(
-        'UPDATE time_slot_capacities SET current_count = current_count - 1 WHERE id = ?'
-      ).run(matched.id);
-    }
-  }
-
-  if (appointment.window_id) {
-    db.prepare(
-      'UPDATE window_slots SET current_count = current_count - 1 WHERE window_id = ? AND item_id = ? AND date = ?'
-    ).run(appointment.window_id, appointment.item_id, appointment.appointment_date);
-  } else if (!hasTimeSlots) {
-    db.prepare(
-      'UPDATE daily_slots SET current_count = current_count - 1 WHERE item_id = ? AND date = ?'
-    ).run(appointment.item_id, appointment.appointment_date);
-  }
+  capacityService.releaseAppointmentCapacity(db, appointment);
 
   const window = appointment.window_id ? 
     db.prepare('SELECT name FROM windows WHERE id = ?').get(appointment.window_id) : null;
@@ -2861,33 +2624,7 @@ app.post('/api/appointments/:id/no-show', (req, res) => {
   db.prepare("UPDATE appointments SET status = 'no_show', no_show_at = CURRENT_TIMESTAMP WHERE id = ?").run(id);
   cancelPendingReminderPlans(id);
 
-  const timeSlotCap = db.prepare(`
-    SELECT * FROM time_slot_capacities 
-    WHERE item_id = ? AND date = ?
-  `).all(appointment.item_id, appointment.appointment_date);
-
-  const hasTimeSlots = timeSlotCap.length > 0;
-
-  if (hasTimeSlots) {
-    const matched = timeSlotCap.find(ts => 
-      appointment.time_slot === `${ts.start_time}-${ts.end_time}`
-    );
-    if (matched) {
-      db.prepare(
-        'UPDATE time_slot_capacities SET current_count = current_count - 1 WHERE id = ?'
-      ).run(matched.id);
-    }
-  }
-
-  if (appointment.window_id) {
-    db.prepare(
-      'UPDATE window_slots SET current_count = current_count - 1 WHERE window_id = ? AND item_id = ? AND date = ?'
-    ).run(appointment.window_id, appointment.item_id, appointment.appointment_date);
-  } else if (!hasTimeSlots) {
-    db.prepare(
-      'UPDATE daily_slots SET current_count = current_count - 1 WHERE item_id = ? AND date = ?'
-    ).run(appointment.item_id, appointment.appointment_date);
-  }
+  capacityService.releaseAppointmentCapacity(db, appointment);
 
   const item = db.prepare('SELECT name FROM items WHERE id = ?').get(appointment.item_id);
   const window = appointment.window_id ?
@@ -3387,19 +3124,11 @@ function getWeeklyWindowTemplates(itemId, weekday) {
 }
 
 function getActiveTimeSlotAppointmentCount(itemId, date, startTime, endTime) {
-  return db.prepare(`
-    SELECT COUNT(*) as cnt FROM appointments
-    WHERE item_id = ? AND appointment_date = ?
-      AND time_slot = ? AND status NOT IN ('cancelled', 'no_show')
-  `).get(itemId, date, `${startTime}-${endTime}`).cnt;
+  return capacityService.getActiveTimeSlotAppointmentCount(db, itemId, date, startTime, endTime);
 }
 
 function getActiveWindowAppointmentCount(itemId, windowId, date) {
-  return db.prepare(`
-    SELECT COUNT(*) as cnt FROM appointments
-    WHERE window_id = ? AND item_id = ? AND appointment_date = ?
-      AND status NOT IN ('cancelled', 'no_show')
-  `).get(windowId, itemId, date).cnt;
+  return windowService.getActiveWindowAppointmentCount(db, itemId, windowId, date);
 }
 
 function syncGeneratedDailySlots(itemId, templates) {
@@ -3564,54 +3293,13 @@ function syncGeneratedWindowTemplates(itemId, weekdays) {
 }
 
 function getEffectiveWindowSlot(itemId, windowId, date, defaultCapacity) {
-  const weekday = getWeekdayFromDate(date);
-
-  let ws = db.prepare(
-    "SELECT * FROM window_slots WHERE window_id = ? AND item_id = ? AND date = ? AND source_type = 'manual'"
-  ).get(windowId, itemId, date);
-
-  if (ws) {
-    return { slot: ws, source: 'manual' };
-  }
-
-  const windowTemplate = db.prepare(
-    'SELECT * FROM weekly_window_templates WHERE item_id = ? AND window_id = ? AND weekday = ?'
-  ).get(itemId, windowId, weekday);
-
-  if (windowTemplate) {
-    let templateWs = db.prepare(
-      "SELECT * FROM window_slots WHERE window_id = ? AND item_id = ? AND date = ? AND source_type = 'template'"
-    ).get(windowId, itemId, date);
-
-    if (templateWs) {
-      return { slot: templateWs, source: 'template' };
-    }
-
-    db.prepare(
-      "INSERT INTO window_slots (window_id, item_id, date, max_count, current_count, source_type) VALUES (?, ?, ?, ?, 0, 'template')"
-    ).run(windowId, itemId, date, windowTemplate.max_count);
-
-    templateWs = db.prepare(
-      "SELECT * FROM window_slots WHERE window_id = ? AND item_id = ? AND date = ? AND source_type = 'template'"
-    ).get(windowId, itemId, date);
-
-    return { slot: templateWs, source: 'template' };
-  }
-
-  let defaultWs = db.prepare(
-    'SELECT * FROM window_slots WHERE window_id = ? AND item_id = ? AND date = ?'
-  ).get(windowId, itemId, date);
-
-  if (!defaultWs) {
-    db.prepare(
-      "INSERT INTO window_slots (window_id, item_id, date, max_count, current_count, source_type) VALUES (?, ?, ?, ?, 0, 'template')"
-    ).run(windowId, itemId, date, defaultCapacity);
-    defaultWs = db.prepare(
-      'SELECT * FROM window_slots WHERE window_id = ? AND item_id = ? AND date = ?'
-    ).get(windowId, itemId, date);
-  }
-
-  return { slot: defaultWs, source: defaultWs.source_type || 'template' };
+  return windowService.getEffectiveWindowSlot(db, {
+    itemId,
+    windowId,
+    date,
+    defaultCapacity,
+    weekday: getWeekdayFromDate(date)
+  });
 }
 
 app.get('/api/items/:itemId/weekly-templates', (req, res) => {
@@ -5031,106 +4719,32 @@ app.post('/api/appointments/:id/reschedule', (req, res) => {
     return res.status(400).json({ error: '新时段与原时段相同，无需改期' });
   }
 
-  const timeSlotCaps = db.prepare(`
-    SELECT * FROM time_slot_capacities 
-    WHERE item_id = ? AND date = ? 
-    ORDER BY sort_order ASC, start_time ASC
-  `).all(appointment.item_id, new_date);
-
-  let useTimeSlots = timeSlotCaps.length > 0;
-  let matchedNewTimeSlot = null;
-
-  if (useTimeSlots) {
-    for (const tsc of timeSlotCaps) {
-      if (new_time_slot === `${tsc.start_time}-${tsc.end_time}`) {
-        matchedNewTimeSlot = tsc;
-        break;
-      }
+  let newSlotCapacity;
+  let newWindowAllocation;
+  try {
+    newSlotCapacity = capacityService.validateTimeSlotCapacity(db, {
+      itemId: appointment.item_id,
+      date: new_date,
+      timeSlot: new_time_slot
+    });
+    newWindowAllocation = windowService.allocateWindow(db, {
+      itemId: appointment.item_id,
+      date: new_date
+    });
+    if (!newWindowAllocation.has_windows && !newSlotCapacity.use_time_slots) {
+      capacityService.validateDailyCapacity(db, {
+        itemId: appointment.item_id,
+        date: new_date,
+        defaultMax: item.default_max_count || 20
+      });
     }
-    if (!matchedNewTimeSlot) {
-      return res.status(400).json({ error: '所选时段无效，请重新选择' });
-    }
-    if (matchedNewTimeSlot.current_count >= matchedNewTimeSlot.max_count) {
-      return res.status(400).json({ error: '该时段号源已满，请选择其他时段' });
-    }
-  } else {
-    const slotCheck = db.prepare(
-      `SELECT COUNT(*) as cnt FROM appointments 
-       WHERE item_id = ? AND appointment_date = ? AND time_slot = ? AND status NOT IN ('cancelled', 'no_show')`
-    ).get(appointment.item_id, new_date, new_time_slot);
-    if (slotCheck.cnt > 0) {
-      return res.status(400).json({ error: '该时段已被预约，请选择其他时段' });
-    }
+  } catch (e) {
+    return res.status(400).json({ error: e.message });
   }
 
-  let assignedNewWindowId = null;
-
-  const allItemWindows = db.prepare(`
-    SELECT COUNT(*) as cnt
-    FROM item_windows iw
-    WHERE iw.item_id = ?
-  `).get(appointment.item_id).cnt;
-
-  if (allItemWindows > 0) {
-    const itemWindows = db.prepare(`
-      SELECT iw.*, w.name as window_name, w.status as window_status
-      FROM item_windows iw
-      LEFT JOIN windows w ON iw.window_id = w.id
-      WHERE iw.item_id = ? AND w.status = 'active'
-      ORDER BY w.sort_order ASC, w.id ASC
-    `).all(appointment.item_id);
-
-    if (itemWindows.length === 0) {
-      return res.status(400).json({ error: '该事项暂无可用办理窗口' });
-    }
-
-    let bestWindow = null;
-    let bestAvailable = -1;
-
-    for (const iw of itemWindows) {
-      let ws = db.prepare(
-        'SELECT * FROM window_slots WHERE window_id = ? AND item_id = ? AND date = ?'
-      ).get(iw.window_id, appointment.item_id, new_date);
-
-      if (!ws) {
-        const defaultCapacity = iw.default_capacity || 10;
-        db.prepare(
-          'INSERT INTO window_slots (window_id, item_id, date, max_count, current_count) VALUES (?, ?, ?, ?, 0)'
-        ).run(iw.window_id, appointment.item_id, new_date, defaultCapacity);
-        ws = db.prepare(
-          'SELECT * FROM window_slots WHERE window_id = ? AND item_id = ? AND date = ?'
-        ).get(iw.window_id, appointment.item_id, new_date);
-      }
-
-      const windowUsed = db.prepare(
-        `SELECT COUNT(*) as cnt FROM appointments 
-         WHERE window_id = ? AND item_id = ? AND appointment_date = ? AND status NOT IN ('cancelled', 'no_show')`
-      ).get(iw.window_id, appointment.item_id, new_date).cnt;
-
-      const available = ws.max_count - windowUsed;
-
-      if (available > 0 && available > bestAvailable) {
-        bestAvailable = available;
-        bestWindow = iw;
-      }
-    }
-
-    if (!bestWindow) {
-      return res.status(400).json({ error: '所有窗口的号源均已满，请选择其他日期' });
-    }
-
-    assignedNewWindowId = bestWindow.window_id;
-  } else if (!useTimeSlots) {
-    let dailySlot = db.prepare('SELECT * FROM daily_slots WHERE item_id = ? AND date = ?').get(appointment.item_id, new_date);
-    if (!dailySlot) {
-      const defaultMax = item.default_max_count || 20;
-      db.prepare('INSERT INTO daily_slots (item_id, date, max_count, current_count) VALUES (?, ?, ?, 0)').run(appointment.item_id, new_date, defaultMax);
-      dailySlot = db.prepare('SELECT * FROM daily_slots WHERE item_id = ? AND date = ?').get(appointment.item_id, new_date);
-    }
-    if (dailySlot.current_count >= dailySlot.max_count) {
-      return res.status(400).json({ error: '该日期号源已满，请选择其他日期' });
-    }
-  }
+  const useTimeSlots = newSlotCapacity.use_time_slots;
+  const matchedNewTimeSlot = newSlotCapacity.matched_time_slot;
+  const assignedNewWindowId = newWindowAllocation.window_id;
 
   const oldTimeSlotCap = db.prepare(`
     SELECT * FROM time_slot_capacities 
@@ -5150,34 +4764,18 @@ app.post('/api/appointments/:id/reschedule', (req, res) => {
       throw new Error('预约状态已变更，无法改期');
     }
 
-    if (hasOldTimeSlots && matchedOldTimeSlot) {
-      const newCount = matchedOldTimeSlot.current_count - 1;
-      if (newCount < 0) {
-        throw new Error('原时段号源计数异常');
-      }
-      db.prepare(
-        'UPDATE time_slot_capacities SET current_count = current_count - 1 WHERE id = ?'
-      ).run(matchedOldTimeSlot.id);
+    if (hasOldTimeSlots && matchedOldTimeSlot && matchedOldTimeSlot.current_count <= 0) {
+      throw new Error('原时段号源计数异常');
     }
 
-    if (appointment.window_id) {
-      db.prepare(
-        'UPDATE window_slots SET current_count = current_count - 1 WHERE window_id = ? AND item_id = ? AND date = ?'
-      ).run(appointment.window_id, appointment.item_id, appointment.appointment_date);
-    } else if (!hasOldTimeSlots) {
-      db.prepare(
-        'UPDATE daily_slots SET current_count = current_count - 1 WHERE item_id = ? AND date = ?'
-      ).run(appointment.item_id, appointment.appointment_date);
-    }
+    capacityService.releaseAppointmentCapacity(db, appointment);
 
     if (useTimeSlots && matchedNewTimeSlot) {
       const recheckSlot = db.prepare('SELECT * FROM time_slot_capacities WHERE id = ?').get(matchedNewTimeSlot.id);
       if (!recheckSlot || recheckSlot.current_count >= recheckSlot.max_count) {
         throw new Error('新时段号源已满，请重新选择');
       }
-      db.prepare(
-        'UPDATE time_slot_capacities SET current_count = current_count + 1 WHERE id = ?'
-      ).run(matchedNewTimeSlot.id);
+      matchedNewTimeSlot.current_count = recheckSlot.current_count;
     }
 
     if (assignedNewWindowId) {
@@ -5187,18 +4785,20 @@ app.post('/api/appointments/:id/reschedule', (req, res) => {
       if (!recheckSlot || recheckSlot.current_count >= recheckSlot.max_count) {
         throw new Error('新窗口号源已满，请重新选择');
       }
-      db.prepare(
-        'UPDATE window_slots SET current_count = current_count + 1 WHERE window_id = ? AND item_id = ? AND date = ?'
-      ).run(assignedNewWindowId, appointment.item_id, new_date);
     } else if (!useTimeSlots) {
       const recheckSlot = db.prepare('SELECT * FROM daily_slots WHERE item_id = ? AND date = ?').get(appointment.item_id, new_date);
       if (!recheckSlot || recheckSlot.current_count >= recheckSlot.max_count) {
         throw new Error('新日期号源已满，请重新选择');
       }
-      db.prepare(
-        'UPDATE daily_slots SET current_count = current_count + 1 WHERE item_id = ? AND date = ?'
-      ).run(appointment.item_id, new_date);
     }
+
+    capacityService.incrementAppointmentCapacity(db, {
+      itemId: appointment.item_id,
+      date: new_date,
+      windowId: assignedNewWindowId,
+      useTimeSlots,
+      matchedTimeSlot: matchedNewTimeSlot
+    });
 
     db.prepare(
       'UPDATE appointments SET appointment_date = ?, time_slot = ?, window_id = ? WHERE id = ?'
