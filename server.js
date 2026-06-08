@@ -3259,6 +3259,183 @@ function getWeeklyWindowTemplates(itemId, weekday) {
   `).all(itemId, weekday);
 }
 
+function getActiveTimeSlotAppointmentCount(itemId, date, startTime, endTime) {
+  return db.prepare(`
+    SELECT COUNT(*) as cnt FROM appointments
+    WHERE item_id = ? AND appointment_date = ?
+      AND time_slot = ? AND status NOT IN ('cancelled', 'no_show')
+  `).get(itemId, date, `${startTime}-${endTime}`).cnt;
+}
+
+function getActiveWindowAppointmentCount(itemId, windowId, date) {
+  return db.prepare(`
+    SELECT COUNT(*) as cnt FROM appointments
+    WHERE window_id = ? AND item_id = ? AND appointment_date = ?
+      AND status NOT IN ('cancelled', 'no_show')
+  `).get(windowId, itemId, date).cnt;
+}
+
+function syncGeneratedDailySlots(itemId, templates) {
+  const todayStr = getTodayStr();
+  const templateList = Array.isArray(templates) ? templates : [];
+
+  for (const t of templateList) {
+    const weekday = parseInt(t.weekday);
+    const maxCount = parseInt(t.max_count);
+    db.prepare(`
+      UPDATE daily_slots
+      SET max_count = CASE WHEN current_count > ? THEN current_count ELSE ? END
+      WHERE item_id = ? AND source_type = 'template' AND date >= ?
+        AND cast(strftime('%w', date) as integer) = ?
+    `).run(maxCount, maxCount, itemId, todayStr, weekday);
+  }
+}
+
+function clearGeneratedDailySlotsForWeekday(itemId, weekday) {
+  const todayStr = getTodayStr();
+  db.prepare(`
+    DELETE FROM daily_slots
+    WHERE item_id = ? AND source_type = 'template' AND date >= ? AND current_count = 0
+      AND cast(strftime('%w', date) as integer) = ?
+  `).run(itemId, todayStr, weekday);
+  db.prepare(`
+    UPDATE daily_slots
+    SET max_count = current_count
+    WHERE item_id = ? AND source_type = 'template' AND date >= ? AND current_count > 0
+      AND cast(strftime('%w', date) as integer) = ?
+  `).run(itemId, todayStr, weekday);
+}
+
+function syncGeneratedTimeSlotTemplates(itemId, weekday, templateSlots) {
+  const todayStr = getTodayStr();
+  const templateList = Array.isArray(templateSlots) ? templateSlots : [];
+  const templateMap = new Map(templateList.map((ts, index) => [
+    `${ts.start_time}-${ts.end_time}`,
+    {
+      start_time: ts.start_time,
+      end_time: ts.end_time,
+      max_count: parseInt(ts.max_count),
+      sort_order: ts.sort_order !== undefined ? parseInt(ts.sort_order) : index
+    }
+  ]));
+
+  const existingSlots = db.prepare(`
+    SELECT * FROM time_slot_capacities
+    WHERE item_id = ? AND source_type = 'template' AND date >= ?
+      AND cast(strftime('%w', date) as integer) = ?
+    ORDER BY date ASC, sort_order ASC, start_time ASC
+  `).all(itemId, todayStr, weekday);
+
+  const existingByDate = new Map();
+  for (const slot of existingSlots) {
+    if (!existingByDate.has(slot.date)) {
+      existingByDate.set(slot.date, []);
+    }
+    existingByDate.get(slot.date).push(slot);
+  }
+
+  for (const [date, slots] of existingByDate.entries()) {
+    const seenKeys = new Set();
+
+    for (const existing of slots) {
+      const key = `${existing.start_time}-${existing.end_time}`;
+      const activeCount = getActiveTimeSlotAppointmentCount(itemId, date, existing.start_time, existing.end_time);
+      const template = templateMap.get(key);
+
+      if (template) {
+        seenKeys.add(key);
+        const maxCount = Math.max(template.max_count, activeCount);
+        db.prepare(`
+          UPDATE time_slot_capacities
+          SET max_count = ?, current_count = ?, sort_order = ?, source_type = 'template'
+          WHERE id = ?
+        `).run(maxCount, activeCount, template.sort_order, existing.id);
+      } else if (activeCount > 0) {
+        db.prepare(`
+          UPDATE time_slot_capacities
+          SET max_count = ?, current_count = ?, source_type = 'template'
+          WHERE id = ?
+        `).run(activeCount, activeCount, existing.id);
+      } else {
+        db.prepare('DELETE FROM time_slot_capacities WHERE id = ?').run(existing.id);
+      }
+    }
+
+    for (const [key, template] of templateMap.entries()) {
+      if (seenKeys.has(key)) continue;
+      db.prepare(`
+        INSERT INTO time_slot_capacities
+        (item_id, date, start_time, end_time, max_count, current_count, sort_order, source_type)
+        VALUES (?, ?, ?, ?, ?, 0, ?, 'template')
+      `).run(itemId, date, template.start_time, template.end_time, template.max_count, template.sort_order);
+    }
+  }
+}
+
+function syncGeneratedWindowTemplates(itemId, weekdays) {
+  const todayStr = getTodayStr();
+  const weekdayList = [...new Set((weekdays || []).map(w => parseInt(w)).filter(w => !isNaN(w) && w >= 0 && w <= 6))];
+  if (weekdayList.length === 0) return;
+
+  const templateRows = db.prepare(`
+    SELECT * FROM weekly_window_templates
+    WHERE item_id = ? AND weekday IN (${weekdayList.map(() => '?').join(',')})
+  `).all(itemId, ...weekdayList);
+  const templateMap = new Map(templateRows.map(t => [`${t.weekday}:${t.window_id}`, t]));
+
+  const existingSlots = db.prepare(`
+    SELECT * FROM window_slots
+    WHERE item_id = ? AND source_type = 'template' AND date >= ?
+      AND cast(strftime('%w', date) as integer) IN (${weekdayList.map(() => '?').join(',')})
+    ORDER BY date ASC, window_id ASC
+  `).all(itemId, todayStr, ...weekdayList);
+
+  const existingByDate = new Map();
+  for (const slot of existingSlots) {
+    if (!existingByDate.has(slot.date)) {
+      existingByDate.set(slot.date, []);
+    }
+    existingByDate.get(slot.date).push(slot);
+  }
+
+  for (const [date, slots] of existingByDate.entries()) {
+    const weekday = getWeekdayFromDate(date);
+    const seenWindowIds = new Set();
+
+    for (const existing of slots) {
+      seenWindowIds.add(existing.window_id);
+      const template = templateMap.get(`${weekday}:${existing.window_id}`);
+      const activeCount = getActiveWindowAppointmentCount(itemId, existing.window_id, date);
+
+      if (template) {
+        const maxCount = Math.max(template.max_count, activeCount);
+        db.prepare(`
+          UPDATE window_slots
+          SET max_count = ?, current_count = ?, source_type = 'template'
+          WHERE id = ?
+        `).run(maxCount, activeCount, existing.id);
+      } else if (activeCount > 0) {
+        db.prepare(`
+          UPDATE window_slots
+          SET max_count = ?, current_count = ?, source_type = 'template'
+          WHERE id = ?
+        `).run(activeCount, activeCount, existing.id);
+      } else {
+        db.prepare('DELETE FROM window_slots WHERE id = ?').run(existing.id);
+      }
+    }
+
+    for (const template of templateRows.filter(t => t.weekday === weekday)) {
+      if (seenWindowIds.has(template.window_id)) continue;
+      const activeCount = getActiveWindowAppointmentCount(itemId, template.window_id, date);
+      db.prepare(`
+        INSERT INTO window_slots (window_id, item_id, date, max_count, current_count, source_type)
+        VALUES (?, ?, ?, ?, ?, 'template')
+      `).run(template.window_id, itemId, date, Math.max(template.max_count, activeCount), activeCount);
+    }
+  }
+}
+
 function getEffectiveWindowSlot(itemId, windowId, date, defaultCapacity) {
   const weekday = getWeekdayFromDate(date);
 
@@ -3424,11 +3601,7 @@ app.put('/api/items/:itemId/weekly-templates/daily', (req, res) => {
       insertStmt.run(itemId, parseInt(t.weekday), parseInt(t.max_count));
     }
 
-    const todayStr = new Date().toISOString().split('T')[0];
-    db.prepare(`
-      DELETE FROM daily_slots 
-      WHERE item_id = ? AND source_type = 'template' AND date >= ? AND current_count = 0
-    `).run(itemId, todayStr);
+    syncGeneratedDailySlots(itemId, templates);
   });
 
   try {
@@ -3465,9 +3638,19 @@ app.put('/api/items/:itemId/weekly-templates/time-slots/:weekday', (req, res) =>
   }
 
   if (time_slots.length === 0) {
-    db.prepare(
-      'DELETE FROM weekly_time_slot_templates WHERE item_id = ? AND weekday = ?'
-    ).run(itemId, weekdayNum);
+    const tx = db.transaction(() => {
+      db.prepare(
+        'DELETE FROM weekly_time_slot_templates WHERE item_id = ? AND weekday = ?'
+      ).run(itemId, weekdayNum);
+      syncGeneratedTimeSlotTemplates(itemId, weekdayNum, []);
+    });
+
+    try {
+      tx();
+    } catch (e) {
+      return res.status(500).json({ error: '保存失败' });
+    }
+
     return res.json({ success: true, time_slots: [] });
   }
 
@@ -3491,8 +3674,8 @@ app.put('/api/items/:itemId/weekly-templates/time-slots/:weekday', (req, res) =>
   const sortedSlots = [...time_slots].sort((a, b) => a.start_time.localeCompare(b.start_time));
   for (let i = 0; i < sortedSlots.length - 1; i++) {
     if (sortedSlots[i + 1].start_time < sortedSlots[i].end_time) {
-      return res.status(400).json({ 
-        error: `时段 ${sortedSlots[i].start_time}-${sortedSlots[i].end_time} 与 ${sortedSlots[i + 1].start_time}-${sortedSlots[i + 1].end_time} 存在重叠` 
+      return res.status(400).json({
+        error: `时段 ${sortedSlots[i].start_time}-${sortedSlots[i].end_time} 与 ${sortedSlots[i + 1].start_time}-${sortedSlots[i + 1].end_time} 存在重叠`
       });
     }
   }
@@ -3503,7 +3686,7 @@ app.put('/api/items/:itemId/weekly-templates/time-slots/:weekday', (req, res) =>
     ).run(itemId, weekdayNum);
 
     const insertStmt = db.prepare(`
-      INSERT INTO weekly_time_slot_templates 
+      INSERT INTO weekly_time_slot_templates
       (item_id, weekday, start_time, end_time, max_count, sort_order)
       VALUES (?, ?, ?, ?, ?, ?)
     `);
@@ -3512,12 +3695,7 @@ app.put('/api/items/:itemId/weekly-templates/time-slots/:weekday', (req, res) =>
       insertStmt.run(itemId, weekdayNum, ts.start_time, ts.end_time, parseInt(ts.max_count), index);
     });
 
-    const todayStr = new Date().toISOString().split('T')[0];
-    db.prepare(`
-      DELETE FROM time_slot_capacities 
-      WHERE item_id = ? AND source_type = 'template' AND date >= ? AND current_count = 0
-        AND cast(strftime('%w', date) as integer) = ?
-    `).run(itemId, todayStr, weekdayNum);
+    syncGeneratedTimeSlotTemplates(itemId, weekdayNum, sortedSlots);
   });
 
   try {
@@ -3581,7 +3759,7 @@ app.put('/api/items/:itemId/weekly-templates/windows', (req, res) => {
     }
 
     const insertStmt = db.prepare(`
-      INSERT OR REPLACE INTO weekly_window_templates 
+      INSERT OR REPLACE INTO weekly_window_templates
       (item_id, window_id, weekday, max_count)
       VALUES (?, ?, ?, ?)
     `);
@@ -3590,13 +3768,7 @@ app.put('/api/items/:itemId/weekly-templates/windows', (req, res) => {
       insertStmt.run(itemId, parseInt(t.window_id), parseInt(t.weekday), parseInt(t.max_count));
     }
 
-    const todayStr = new Date().toISOString().split('T')[0];
-    const weekdayPlaceholders = weekdays.map(() => '?').join(',');
-    db.prepare(`
-      DELETE FROM window_slots 
-      WHERE item_id = ? AND source_type = 'template' AND date >= ? AND current_count = 0
-        AND cast(strftime('%w', date) as integer) IN (${weekdayPlaceholders})
-    `).run(itemId, todayStr, ...weekdays);
+    syncGeneratedWindowTemplates(itemId, weekdays);
   });
 
   try {
@@ -3633,12 +3805,7 @@ app.delete('/api/items/:itemId/weekly-templates/daily/:weekday', (req, res) => {
     'DELETE FROM weekly_daily_templates WHERE item_id = ? AND weekday = ?'
   ).run(itemId, weekdayNum);
 
-  const todayStr = new Date().toISOString().split('T')[0];
-  db.prepare(`
-    DELETE FROM daily_slots 
-    WHERE item_id = ? AND source_type = 'template' AND date >= ? AND current_count = 0
-      AND cast(strftime('%w', date) as integer) = ?
-  `).run(itemId, todayStr, weekdayNum);
+  clearGeneratedDailySlotsForWeekday(itemId, weekdayNum);
 
   res.json({ success: true });
 });
@@ -3660,12 +3827,7 @@ app.delete('/api/items/:itemId/weekly-templates/time-slots/:weekday', (req, res)
     'DELETE FROM weekly_time_slot_templates WHERE item_id = ? AND weekday = ?'
   ).run(itemId, weekdayNum);
 
-  const todayStr = new Date().toISOString().split('T')[0];
-  db.prepare(`
-    DELETE FROM time_slot_capacities 
-    WHERE item_id = ? AND source_type = 'template' AND date >= ? AND current_count = 0
-      AND cast(strftime('%w', date) as integer) = ?
-  `).run(itemId, todayStr, weekdayNum);
+  syncGeneratedTimeSlotTemplates(itemId, weekdayNum, []);
 
   res.json({ success: true });
 });
@@ -3687,12 +3849,7 @@ app.delete('/api/items/:itemId/weekly-templates/windows/:weekday', (req, res) =>
     'DELETE FROM weekly_window_templates WHERE item_id = ? AND weekday = ?'
   ).run(itemId, weekdayNum);
 
-  const todayStr = new Date().toISOString().split('T')[0];
-  db.prepare(`
-    DELETE FROM window_slots 
-    WHERE item_id = ? AND source_type = 'template' AND date >= ? AND current_count = 0
-      AND cast(strftime('%w', date) as integer) = ?
-  `).run(itemId, todayStr, weekdayNum);
+  syncGeneratedWindowTemplates(itemId, [weekdayNum]);
 
   res.json({ success: true });
 });
